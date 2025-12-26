@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Calevid AI Video Generator</title>
+</head>
+<body>
+  <h1>Calevid AI Video Generator</h1>
+
+  <!-- Payment Button -->
+  <button id="payBtn">Pay to Generate Video</button>
+  <br><br>
+
+  <!-- Aspect Ratio & Length -->
+  <label for="aspectSelect">Aspect Ratio:</label>
+  <select id="aspectSelect">
+    <option value="16:9">16:9 (Landscape)</option>
+    <option value="1:1">1:1 (Square)</option>
+    <option value="9:16">9:16 (Portrait)</option>
+  </select>
+  <br><br>
+
+  <label for="lengthInput">Video Length (seconds, optional):</label>
+  <input type="number" id="lengthInput" placeholder="10" min="1" style="width: 60px;">
+  <br><br>
+
+  <!-- Prompt -->
+  <input type="text" id="promptInput" placeholder="Enter your prompt" style="width: 300px;">
+  <button id="generateBtn" disabled>Generate Video</button>
+
+  <h3>Result:</h3>
+  <div id="result"></div>
+
+  <script src="https://js.paystack.co/v1/inline.js"></script>
+
+  <script>
+    const payBtn = document.getElementById('payBtn');
+    const generateBtn = document.getElementById('generateBtn');
+    const resultDiv = document.getElementById('result');
+    let paymentVerified = false;
+
+    // PAYSTACK PAYMENT
+    payBtn.addEventListener('click', () => {
+      const handler = PaystackPop.setup({
+        key: "pk_test_0f7feea3239f846e488024356f43a0570e1aad89", // Replace with your public key
+        email: "test@example.com",
+        amount: 1000, // KES 10
+        currency: "KES",
+        callback: function(response) {
+          alert('Payment complete! Reference: ' + response.reference);
+          paymentVerified = true;
+          generateBtn.disabled = false;
+        },
+        onClose: function() {
+          alert('Payment cancelled');
+        }
+      });
+      handler.openIframe();
+    });
+
+    // GENERATE VIDEO BUTTON
+    generateBtn.addEventListener('click', async () => {
+      if (!paymentVerified) {
+        alert("Please complete payment first!");
+        return;
+      }
+
+      const prompt = document.getElementById('promptInput').value;
+      if (!prompt) {
+        alert("Please enter a prompt!");
+        return;
+      }
+
+      const aspect_ratio = document.getElementById("aspectSelect").value;
+      const length = document.getElementById("lengthInput").value;
+
+      resultDiv.innerHTML = "Processing...";
+
+      try {
+        const response = await fetch('http://localhost:3000/generate-video', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            prompt,
+            aspect_ratio,
+            length: length ? Number(length) : undefined
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.videoUrl) {
+          resultDiv.innerHTML = `
+            <p><strong>Prompt:</strong> ${data.prompt}</p>
+            <p><strong>Message:</strong> ${data.message}</p>
+            <video width="400" controls>
+              <source src="${data.videoUrl}" type="video/mp4">
+              Your browser does not support the video tag.
+            </video>
+            <br>
+            <a href="${data.videoUrl}" download="calevid-video.mp4">
+              <button>Download Video</button>
+            </a>
+          `;
+        } else {
+          resultDiv.innerHTML = "No video URL returned.";
+        }
+
+      } catch (err) {
+        resultDiv.innerHTML = "Error: " + err;
+      }
+    });
+  </script>
+</body>
+</html>
