@@ -1,29 +1,48 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="UTF-8">
   <title>Calevid AI Video Generator</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-
-  <!-- Paystack -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script src="https://js.paystack.co/v1/inline.js"></script>
-
   <style>
-    body { font-family: Arial; max-width: 600px; margin: 40px auto; }
-    input, button { width: 100%; padding: 12px; margin-top: 10px; font-size: 16px; }
-    button { cursor: pointer; border: none; }
-    #generateBtn { background: #ccc; color: #666; }
-    #generateBtn.enabled { background: #0b5ed7; color: #fff; }
-    #result { margin-top: 20px; }
-    video { margin-top: 10px; width: 100%; }
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+    }
+    input, button {
+      width: 100%;
+      padding: 12px;
+      margin-top: 10px;
+      font-size: 16px;
+    }
+    button {
+      cursor: pointer;
+      border: none;
+    }
+    #generateBtn {
+      background: #ccc;
+      color: #666;
+    }
+    #generateBtn.enabled {
+      background: #0b5ed7;
+      color: #fff;
+    }
+    #result {
+      margin-top: 20px;
+    }
+    video {
+      margin-top: 10px;
+      width: 100%;
+    }
   </style>
 </head>
 <body>
 
 <h2>Calevid AI Video Generator</h2>
 
-<input id="promptInput" type="text" placeholder="Describe your video..." />
-
+<input id="promptInput" type="text" placeholder="Enter video prompt..." />
 <button id="payBtn">Pay to Generate Video (KES 10)</button>
 <button id="generateBtn" disabled>Generate Video</button>
 
@@ -34,24 +53,24 @@
   const generateBtn = document.getElementById("generateBtn");
   const resultDiv = document.getElementById("result");
 
-  const BACKEND_URL = "https://calevid-saas-8.onrender.com";
   let paymentVerified = false;
+  const BACKEND_URL = "https://calevid-saas-8.onrender.com"; // your backend URL
 
-  // ---------------- PAYSTACK PAYMENT ----------------
+  // -------- PAYSTACK PAYMENT & BACKEND VERIFICATION --------
   payBtn.addEventListener("click", () => {
-    const email = prompt("Enter your email for payment:");
+    const email = prompt("Enter your email for test payment:");
     if (!email) { alert("Email is required"); return; }
 
     const handler = PaystackPop.setup({
-      key: "pk_live_933395bd795d5fe25a99b8674a830422a68c959f", // Replace with your KES live key
+      key: "pk_test_0f7feea3239f846e488024356f43a0570e1aad89", // <-- Replace with your Paystack TEST public key
       email: email,
       amount: 1000, // KES 10
       currency: "KES",
       ref: "CALEVID_" + Math.floor(Math.random() * 1000000000),
 
       callback: async function(response) {
-        // Step 1: Send reference to backend for verification
         try {
+          // Send reference to backend for verification
           const verify = await fetch(`${BACKEND_URL}/verify-payment`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -62,7 +81,7 @@
           console.log("Payment verification:", data);
 
           if (data.status === "success") {
-            alert("Payment verified. You can now generate a video.");
+            alert("Payment verified! You can now generate a video.");
             paymentVerified = true;
             generateBtn.disabled = false;
             generateBtn.classList.add("enabled");
@@ -70,7 +89,7 @@
             alert("Payment verification failed. Try again.");
           }
 
-        } catch (err) {
+        } catch(err) {
           console.error("Verification error:", err);
           alert("Error verifying payment.");
         }
@@ -84,12 +103,12 @@
     handler.openIframe();
   });
 
-  // ---------------- GENERATE VIDEO ----------------
+  // -------- GENERATE VIDEO --------
   generateBtn.addEventListener("click", async () => {
     if (!paymentVerified) { alert("Please complete payment first"); return; }
 
     const prompt = document.getElementById("promptInput").value;
-    if (!prompt) { alert("Please enter a prompt"); return; }
+    if (!prompt) { alert("Please enter a prompt!"); return; }
 
     resultDiv.innerHTML = "Generating video...";
 
@@ -97,7 +116,7 @@
       const response = await fetch(`${BACKEND_URL}/generate-video`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, paymentVerified })
+        body: JSON.stringify({ prompt })
       });
 
       const data = await response.json();
@@ -107,8 +126,7 @@
           <p><strong>Prompt:</strong> ${prompt}</p>
           <p>${data.message}</p>
           <video controls>
-            <source src="${data.videoUrl}" type="video/mp4">
-            Your browser does not support the video tag.
+            <source src="${data.videoUrl}" type="video/mp4" />
           </video>
         `;
       } else {
@@ -116,7 +134,7 @@
       }
 
     } catch (err) {
-      console.error("Error generating video:", err);
+      console.error(err);
       resultDiv.innerHTML = "Error connecting to backend.";
     }
   });
