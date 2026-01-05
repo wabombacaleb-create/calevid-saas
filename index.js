@@ -11,13 +11,22 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// ✅ Health check
+// =================================================
+// ✅ HEALTH CHECK ROUTES
+// =================================================
+
+// Root route
 app.get("/", (req, res) => {
   res.send("Calevid backend is running");
 });
 
+// Status test route for WordPress connectivity
+app.get("/status/test", (req, res) => {
+  res.json({ status: "Node backend is running" });
+});
+
 // =================================================
-// ✅ PAYSTACK PAYMENT VERIFICATION (SAFE MODE)
+// ✅ PAYSTACK PAYMENT VERIFICATION
 // =================================================
 app.post("/verify-payment", async (req, res) => {
   const { reference } = req.body;
@@ -43,7 +52,6 @@ app.post("/verify-payment", async (req, res) => {
 
     const result = await response.json();
 
-    // ✅ Log for debugging (very important)
     console.log("PAYSTACK VERIFY RESPONSE:", result);
 
     if (result.status && result.data.status === "success") {
@@ -74,7 +82,7 @@ app.post("/verify-payment", async (req, res) => {
 });
 
 // =================================================
-// ✅ VIDEO GENERATION (STILL SAFE / MOCK MODE)
+// ✅ VIDEO GENERATION (SIMULATED / TEST MODE)
 // =================================================
 app.post("/generate-video", (req, res) => {
   const { prompt } = req.body;

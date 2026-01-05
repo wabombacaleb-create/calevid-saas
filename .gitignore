@@ -1,1 +1,22 @@
-node_modules/ 
+# Node
+node_modules/
+
+# Logs
+*.log
+debug.log
+
+# Certificates
+cacert.pem
+
+# Windows binaries
+*.exe
+*.dll
+
+# System / bundled folders
+dev/
+ext/
+extras/
+lib/
+
+# Environment files
+.env
