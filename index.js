@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
-import Fal from "@fal-ai/client"; // Make sure Fal.ai client is installed
+import Fal from "@fal-ai/client";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -26,9 +26,7 @@ app.get("/status/test", (req, res) => {
 // =================================================
 app.post("/verify-payment", async (req, res) => {
   const { reference } = req.body;
-  if (!reference) {
-    return res.status(400).json({ status: "error", message: "Payment reference is required" });
-  }
+  if (!reference) return res.status(400).json({ status: "error", message: "Payment reference is required" });
 
   try {
     const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
@@ -72,16 +70,14 @@ app.post("/verify-payment", async (req, res) => {
 app.post("/generate-video", async (req, res) => {
   const { prompt } = req.body;
 
-  if (!prompt) {
-    return res.status(400).json({ status: "error", message: "Prompt is required" });
-  }
+  if (!prompt) return res.status(400).json({ status: "error", message: "Prompt is required" });
 
   console.log("VIDEO PROMPT RECEIVED:", prompt);
 
   try {
     // Configure Fal.ai client
     const fal = new Fal({
-      credentials: process.env.FAL_KEY, // Fal.ai API key
+      credentials: process.env.FAL_KEY, // Your Fal.ai API key
     });
 
     // Generate video with Ovi AI
@@ -96,7 +92,7 @@ app.post("/generate-video", async (req, res) => {
     res.json({
       status: "success",
       message: "Video generated successfully",
-      videoUrl: video.output[0].url, // returned video URL
+      videoUrl: video.output[0].url, // URL of the generated video
     });
   } catch (error) {
     console.error("FAL.AI VIDEO ERROR:", error);
