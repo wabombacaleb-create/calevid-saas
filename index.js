@@ -1,26 +1,22 @@
 import express from "express";
 import cors from "cors";
 import fetch from "node-fetch";
+import Fal from "@fal-ai/client"; // Make sure Fal.ai client is installed
 
 const app = express();
-
-// ✅ Render provides PORT automatically
 const PORT = process.env.PORT || 3000;
 
-// ✅ Middleware
+// Middleware
 app.use(cors());
 app.use(express.json());
 
 // =================================================
-// ✅ HEALTH CHECK ROUTES
+// ✅ HEALTH CHECK
 // =================================================
-
-// Root route
 app.get("/", (req, res) => {
   res.send("Calevid backend is running");
 });
 
-// Status test route for WordPress connectivity
 app.get("/status/test", (req, res) => {
   res.json({ status: "Node backend is running" });
 });
@@ -30,28 +26,20 @@ app.get("/status/test", (req, res) => {
 // =================================================
 app.post("/verify-payment", async (req, res) => {
   const { reference } = req.body;
-
   if (!reference) {
-    return res.status(400).json({
-      status: "error",
-      message: "Payment reference is required",
-    });
+    return res.status(400).json({ status: "error", message: "Payment reference is required" });
   }
 
   try {
-    const response = await fetch(
-      `https://api.paystack.co/transaction/verify/${reference}`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+    const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+        "Content-Type": "application/json",
+      },
+    });
 
     const result = await response.json();
-
     console.log("PAYSTACK VERIFY RESPONSE:", result);
 
     if (result.status && result.data.status === "success") {
@@ -74,36 +62,50 @@ app.post("/verify-payment", async (req, res) => {
     }
   } catch (error) {
     console.error("VERIFY PAYMENT ERROR:", error);
-    return res.status(500).json({
-      status: "error",
-      message: "Server error verifying payment",
-    });
+    return res.status(500).json({ status: "error", message: "Server error verifying payment" });
   }
 });
 
 // =================================================
-// ✅ VIDEO GENERATION (SIMULATED / TEST MODE)
+// ✅ VIDEO GENERATION VIA FAL.AI / OVI AI
 // =================================================
-app.post("/generate-video", (req, res) => {
+app.post("/generate-video", async (req, res) => {
   const { prompt } = req.body;
 
   if (!prompt) {
-    return res.status(400).json({
-      status: "error",
-      message: "Prompt is required",
-    });
+    return res.status(400).json({ status: "error", message: "Prompt is required" });
   }
 
   console.log("VIDEO PROMPT RECEIVED:", prompt);
 
-  // ⏳ Simulated video generation
-  setTimeout(() => {
+  try {
+    // Configure Fal.ai client
+    const fal = new Fal({
+      credentials: process.env.FAL_KEY, // Fal.ai API key
+    });
+
+    // Generate video with Ovi AI
+    const video = await fal.video.create({
+      model: "fal-ai/ovi",
+      prompt: prompt,
+      resolution: "720p",
+    });
+
+    console.log("VIDEO GENERATED:", video);
+
     res.json({
       status: "success",
-      message: "Video generation simulated (test mode)",
-      videoUrl: "https://example.com/sample-video.mp4",
+      message: "Video generated successfully",
+      videoUrl: video.output[0].url, // returned video URL
     });
-  }, 2000);
+  } catch (error) {
+    console.error("FAL.AI VIDEO ERROR:", error);
+    res.status(500).json({
+      status: "error",
+      message: "Fal.ai video generation failed",
+      error: error.message,
+    });
+  }
 });
 
 // =================================================
