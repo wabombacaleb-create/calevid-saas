@@ -1,37 +1,88 @@
 import express from "express";
 import cors from "cors";
+import fetch from "node-fetch";
 import { fal } from "@fal-ai/client";
 
+// =================================================
+// ✅ CONFIG
+// =================================================
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===============================
-// Middleware
-// ===============================
+// Fal.ai configuration
+fal.config({
+  credentials: process.env.FAL_KEY, // REQUIRED in Render env vars
+});
+
+// =================================================
+// ✅ MIDDLEWARE
+// =================================================
 app.use(cors());
 app.use(express.json());
 
-// ===============================
-// Fal.ai configuration (CORRECT)
-// ===============================
-fal.config({
-  credentials: process.env.FAL_KEY, // DO NOT hardcode
-});
-
-// ===============================
-// Health check
-// ===============================
+// =================================================
+// ✅ HEALTH CHECK
+// =================================================
 app.get("/", (req, res) => {
   res.send("Calevid backend is running");
 });
 
-app.get("/status/test", (req, res) => {
-  res.json({ status: "Node backend is running" });
+// =================================================
+// ✅ PAYSTACK PAYMENT VERIFICATION
+// =================================================
+app.post("/verify-payment", async (req, res) => {
+  const { reference } = req.body;
+
+  if (!reference) {
+    return res.status(400).json({
+      status: "error",
+      message: "Payment reference is required",
+    });
+  }
+
+  try {
+    const response = await fetch(
+      `https://api.paystack.co/transaction/verify/${reference}`,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const result = await response.json();
+    console.log("PAYSTACK RESPONSE:", result);
+
+    if (result.status && result.data.status === "success") {
+      return res.json({
+        status: "success",
+        message: "Payment verified",
+        data: {
+          amount: result.data.amount,
+          currency: result.data.currency,
+          email: result.data.customer.email,
+          reference: result.data.reference,
+        },
+      });
+    }
+
+    return res.status(400).json({
+      status: "failed",
+      message: "Payment not successful",
+    });
+  } catch (error) {
+    console.error("PAYSTACK ERROR:", error);
+    return res.status(500).json({
+      status: "error",
+      message: "Server error verifying payment",
+    });
+  }
 });
 
-// ===============================
-// VIDEO GENERATION (REAL)
-// ===============================
+// =================================================
+// ✅ FAL.AI / OVI VIDEO GENERATION (REAL)
+// =================================================
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -45,49 +96,40 @@ app.post("/generate-video", async (req, res) => {
 
     console.log("VIDEO PROMPT:", prompt);
 
-    // 🔥 OVI AI via Fal.ai
     const result = await fal.subscribe("fal-ai/ovi", {
       input: {
         prompt: prompt,
       },
-      logs: true,
     });
 
     console.log("FAL RESPONSE:", result);
 
-    // Ovi returns video URL(s)
-    const videoUrl =
-      result?.output?.video?.url ||
-      result?.output?.video_url ||
-      null;
-
-    if (!videoUrl) {
+    if (!result?.data?.video?.url) {
       return res.status(500).json({
         status: "error",
-        message: "Video generated but URL not found",
-        raw: result,
+        message: "Video generation failed",
       });
     }
 
     return res.json({
       status: "success",
-      message: "Video generated successfully",
-      videoUrl: videoUrl,
+      videoUrl: result.data.video.url,
+      requestId: result.requestId,
     });
   } catch (error) {
-    console.error("FAL VIDEO ERROR:", error);
+    console.error("FAL AI ERROR:", error);
 
     return res.status(500).json({
       status: "error",
       message: "Fal.ai video generation failed",
-      error: error.message,
+      error: error?.message || error,
     });
   }
 });
 
-// ===============================
-// Start server
-// ===============================
+// =================================================
+// ✅ SERVER START
+// =================================================
 app.listen(PORT, () => {
   console.log(`Calevid backend running on port ${PORT}`);
 });
