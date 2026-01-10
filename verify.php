@@ -1,151 +1,111 @@
 <?php
 /**
- * Paystack payment verification endpoint
- * Secure version – NO hardcoded secrets
+ * Paystack verification endpoint (Render-safe)
+ * No WP sessions, no frontend trust
  */
-
-// Load WordPress
-require_once('../../../wp-load.php');
 
 header('Content-Type: application/json');
 
-// Only allow POST
+// Only POST
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Invalid request method'
-    ]);
+    echo json_encode(['status'=>'error','message'=>'Invalid request']);
     exit;
 }
 
 // Read JSON body
-$rawInput = file_get_contents('php://input');
-$data = json_decode($rawInput, true);
+$data = json_decode(file_get_contents('php://input'), true);
 
-if (!is_array($data)) {
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Invalid JSON payload'
-    ]);
+if (empty($data['reference']) || empty($data['user_id'])) {
+    echo json_encode(['status'=>'error','message'=>'Missing reference or user']);
     exit;
 }
 
-// Validate required fields
-if (empty($data['reference']) || empty($data['credits'])) {
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Missing reference or credits'
-    ]);
+$reference = trim($data['reference']);
+$user_id   = intval($data['user_id']);
+
+// Load WordPress safely
+require_once(__DIR__ . '/wp-load.php');
+
+if (!$user_id || !get_user_by('ID', $user_id)) {
+    echo json_encode(['status'=>'error','message'=>'Invalid user']);
     exit;
 }
 
-$reference    = sanitize_text_field($data['reference']);
-$creditsToAdd = intval($data['credits']);
-
-if ($creditsToAdd <= 0) {
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Invalid credit amount'
-    ]);
-    exit;
-}
-
-// Get Paystack secret key from ENV (SECURE)
+// Paystack secret
 $secretKey = getenv('PAYSTACK_SECRET_KEY');
-
 if (!$secretKey) {
-    error_log('PAYSTACK_SECRET_KEY not set');
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Server configuration error'
-    ]);
+    echo json_encode(['status'=>'error','message'=>'Server misconfigured']);
     exit;
 }
 
-// Verify transaction with Paystack
-$ch = curl_init();
+// Verify transaction
+$ch = curl_init("https://api.paystack.co/transaction/verify/" . urlencode($reference));
 curl_setopt_array($ch, [
-    CURLOPT_URL            => "https://api.paystack.co/transaction/verify/" . urlencode($reference),
-    CURLOPT_HTTPHEADER     => [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_HTTPHEADER => [
         "Authorization: Bearer {$secretKey}",
         "Content-Type: application/json"
     ],
-    CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_TIMEOUT        => 30,
 ]);
-
 $response = curl_exec($ch);
-
-if ($response === false) {
-    $curlError = curl_error($ch);
-    curl_close($ch);
-
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Connection error',
-        'details' => $curlError
-    ]);
-    exit;
-}
-
 curl_close($ch);
 
-$paystackData = json_decode($response, true);
+$paystack = json_decode($response, true);
 
-if (!isset($paystackData['status']) || $paystackData['status'] !== true) {
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Transaction verification failed'
-    ]);
+if (!isset($paystack['status']) || $paystack['status'] !== true) {
+    echo json_encode(['status'=>'error','message'=>'Verification failed']);
     exit;
 }
 
-// Ensure payment was successful
-if ($paystackData['data']['status'] !== 'success') {
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Payment not successful'
-    ]);
+if ($paystack['data']['status'] !== 'success') {
+    echo json_encode(['status'=>'error','message'=>'Payment not successful']);
     exit;
 }
 
-// Ensure WordPress user is logged in
-$current_user = wp_get_current_user();
-
-if (!$current_user || $current_user->ID === 0) {
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'User not logged in'
-    ]);
+// Prevent duplicate crediting
+$tx_key = 'calevid_tx_' . $reference;
+if (get_user_meta($user_id, $tx_key, true)) {
+    echo json_encode(['status'=>'success','message'=>'Already processed']);
     exit;
 }
 
-// Prevent double crediting (VERY IMPORTANT)
-$transactionRefKey = 'paystack_tx_' . $reference;
-$alreadyProcessed  = get_user_meta($current_user->ID, $transactionRefKey, true);
+// Get saved intent
+$intent = get_user_meta($user_id, 'calevid_pending_purchase', true);
 
-if ($alreadyProcessed) {
-    echo json_encode([
-        'status'  => 'success',
-        'message' => 'Transaction already processed'
-    ]);
+if (!$intent) {
+    echo json_encode(['status'=>'error','message'=>'Missing purchase intent']);
     exit;
 }
 
-// Update credits
-$existingCredits = intval(get_user_meta($current_user->ID, 'video_credits', true));
-$newCredits      = $existingCredits + $creditsToAdd;
+/* ======================
+   APPLY PURCHASE
+====================== */
 
-update_user_meta($current_user->ID, 'video_credits', $newCredits);
+if (!empty($intent['credits'])) {
+    $current = (int) get_user_meta($user_id, 'calevid_credits', true);
+    update_user_meta($user_id, 'calevid_credits', $current + (int)$intent['credits']);
+}
 
-// Mark transaction as processed
-update_user_meta($current_user->ID, $transactionRefKey, time());
+if (!empty($intent['plan'])) {
+    $plans = [
+        'starter'  => 15,
+        'standard' => 25,
+        'pro'      => 50
+    ];
+
+    update_user_meta($user_id, 'calevid_plan', $intent['plan']);
+    update_user_meta($user_id, 'calevid_limit', $plans[$intent['plan']]);
+    update_user_meta($user_id, 'calevid_used', 0);
+    update_user_meta($user_id, 'calevid_plan_start', time());
+}
+
+// Mark transaction
+update_user_meta($user_id, $tx_key, time());
+delete_user_meta($user_id, 'calevid_pending_purchase');
 
 echo json_encode([
     'status'  => 'success',
-    'message' => 'Payment verified and credits added',
-    'credits' => $newCredits
+    'message' => 'Payment applied successfully'
 ]);
-
 exit;
