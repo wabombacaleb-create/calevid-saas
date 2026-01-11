@@ -1,45 +1,63 @@
 <?php
 /**
- * Paystack verification endpoint (Render-safe)
- * No WP sessions, no frontend trust
+ * Calevid Paystack Verification Endpoint
+ * Runs on Render
+ * Single source of truth for payments
  */
 
 header('Content-Type: application/json');
 
-// Only POST
+// Allow only POST
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
-    echo json_encode(['status'=>'error','message'=>'Invalid request']);
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'Invalid request method'
+    ]);
     exit;
 }
 
 // Read JSON body
-$data = json_decode(file_get_contents('php://input'), true);
+$input = json_decode(file_get_contents('php://input'), true);
 
-if (empty($data['reference']) || empty($data['user_id'])) {
-    echo json_encode(['status'=>'error','message'=>'Missing reference or user']);
+if (
+    empty($input['reference']) ||
+    empty($input['user_id'])
+) {
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'Missing payment reference or user'
+    ]);
     exit;
 }
 
-$reference = trim($data['reference']);
-$user_id   = intval($data['user_id']);
+$reference = trim($input['reference']);
+$user_id   = (int) $input['user_id'];
 
-// Load WordPress safely
-require_once(__DIR__ . '/wp-load.php');
+// Load WordPress (adjust path if needed)
+require_once __DIR__ . '/wp-load.php';
 
-if (!$user_id || !get_user_by('ID', $user_id)) {
-    echo json_encode(['status'=>'error','message'=>'Invalid user']);
+// Validate user
+$user = get_user_by('ID', $user_id);
+if (!$user) {
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'Invalid user'
+    ]);
     exit;
 }
 
-// Paystack secret
+// Get Paystack secret key (LIVE)
 $secretKey = getenv('PAYSTACK_SECRET_KEY');
 if (!$secretKey) {
-    echo json_encode(['status'=>'error','message'=>'Server misconfigured']);
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'Paystack secret key not configured'
+    ]);
     exit;
 }
 
-// Verify transaction
+// Verify transaction with Paystack
 $ch = curl_init("https://api.paystack.co/transaction/verify/" . urlencode($reference));
 curl_setopt_array($ch, [
     CURLOPT_RETURNTRANSFER => true,
@@ -48,64 +66,82 @@ curl_setopt_array($ch, [
         "Content-Type: application/json"
     ],
 ]);
+
 $response = curl_exec($ch);
 curl_close($ch);
 
 $paystack = json_decode($response, true);
 
-if (!isset($paystack['status']) || $paystack['status'] !== true) {
-    echo json_encode(['status'=>'error','message'=>'Verification failed']);
+if (
+    !isset($paystack['status']) ||
+    $paystack['status'] !== true ||
+    $paystack['data']['status'] !== 'success'
+) {
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'Payment verification failed'
+    ]);
     exit;
 }
 
-if ($paystack['data']['status'] !== 'success') {
-    echo json_encode(['status'=>'error','message'=>'Payment not successful']);
-    exit;
-}
-
-// Prevent duplicate crediting
+// Prevent duplicate processing
 $tx_key = 'calevid_tx_' . $reference;
 if (get_user_meta($user_id, $tx_key, true)) {
-    echo json_encode(['status'=>'success','message'=>'Already processed']);
+    echo json_encode([
+        'status' => 'success',
+        'message' => 'Transaction already processed'
+    ]);
     exit;
 }
 
-// Get saved intent
+// Retrieve saved purchase intent
 $intent = get_user_meta($user_id, 'calevid_pending_purchase', true);
-
-if (!$intent) {
-    echo json_encode(['status'=>'error','message'=>'Missing purchase intent']);
+if (!$intent || !is_array($intent)) {
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'Purchase intent missing'
+    ]);
     exit;
 }
 
-/* ======================
+/* ==========================
    APPLY PURCHASE
-====================== */
+========================== */
 
+// CREDIT PURCHASE
 if (!empty($intent['credits'])) {
     $current = (int) get_user_meta($user_id, 'calevid_credits', true);
-    update_user_meta($user_id, 'calevid_credits', $current + (int)$intent['credits']);
+    update_user_meta(
+        $user_id,
+        'calevid_credits',
+        $current + (int) $intent['credits']
+    );
 }
 
+// PLAN PURCHASE
 if (!empty($intent['plan'])) {
+
     $plans = [
         'starter'  => 15,
         'standard' => 25,
         'pro'      => 50
     ];
 
-    update_user_meta($user_id, 'calevid_plan', $intent['plan']);
-    update_user_meta($user_id, 'calevid_limit', $plans[$intent['plan']]);
-    update_user_meta($user_id, 'calevid_used', 0);
-    update_user_meta($user_id, 'calevid_plan_start', time());
+    if (isset($plans[$intent['plan']])) {
+        update_user_meta($user_id, 'calevid_plan', $intent['plan']);
+        update_user_meta($user_id, 'calevid_limit', $plans[$intent['plan']]);
+        update_user_meta($user_id, 'calevid_used', 0);
+        update_user_meta($user_id, 'calevid_plan_start', time());
+    }
 }
 
-// Mark transaction
+// Mark transaction as processed
 update_user_meta($user_id, $tx_key, time());
 delete_user_meta($user_id, 'calevid_pending_purchase');
 
+// Success response
 echo json_encode([
     'status'  => 'success',
-    'message' => 'Payment applied successfully'
+    'message' => 'Payment verified and applied successfully'
 ]);
 exit;
