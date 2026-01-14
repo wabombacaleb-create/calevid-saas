@@ -1,0 +1,80 @@
+body {
+    font-family: Arial, sans-serif;
+    background: #f6f6f6;
+}
+
+/* Dashboard container */
+.calevid-dashboard {
+    max-width: 800px;
+    margin: 30px auto;
+    background: #fff;
+    padding: 25px;
+    border-radius: 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+}
+
+/* Headings */
+.calevid-dashboard h2,
+.calevid-dashboard h3 {
+    color: #111;
+    margin-bottom: 12px;
+}
+
+/* Inputs */
+.calevid-dashboard textarea,
+.calevid-dashboard select {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 16px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+}
+
+/* 🔥 VERY IMPORTANT: Scoped button styling */
+.calevid-dashboard button {
+    width: 100%;
+    padding: 14px;
+    background: #0066ff;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 600;
+
+    /* ✅ THIS FIXES THE TOUCHING ISSUE */
+    margin-top: 0;
+    margin-bottom: 16px;
+
+    display: block;
+}
+
+/* Hover */
+.calevid-dashboard button:hover {
+    opacity: 0.9;
+}
+
+/* Subscription buttons */
+.calevid-dashboard .subscribe-btn {
+    background: #ff6600;
+}
+
+.calevid-dashboard .subscribe-btn:hover {
+    background: #cc5200;
+}
+
+/* Video output */
+#calevid-video-result video {
+    width: 100%;
+    margin-top: 20px;
+    border-radius: 12px;
+}
+
+/* Logout */
+.calevid-logout {
+    display: block;
+    margin-top: 25px;
+    color: #cc0000;
+    text-decoration: none;
+    font-weight: 600;
+}

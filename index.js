@@ -1,5 +1,8 @@
 import express from "express";
 import cors from "cors";
+import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import fetch from "node-fetch";
 import { fal } from "@fal-ai/client";
 
@@ -7,129 +10,119 @@ import { fal } from "@fal-ai/client";
 // ✅ CONFIG
 // =================================================
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Fal.ai configuration
-fal.config({
-  credentials: process.env.FAL_KEY, // REQUIRED in Render env vars
-});
+const PORT = process.env.PORT || 10000;
+const WP_SITE_URL = process.env.WP_SITE_URL;
 
 // =================================================
-// ✅ MIDDLEWARE
+// ✅ GLOBAL MIDDLEWARE
 // =================================================
 app.use(cors());
 app.use(express.json());
+app.use("/paystack-webhook", express.raw({ type: "application/json" }));
+
+// =================================================
+// ✅ FAL.AI CONFIG
+// =================================================
+fal.config({ credentials: process.env.FAL_KEY });
+
+// =================================================
+// ✅ LOGGING UTILITY
+// =================================================
+function logWebhook(message, data = {}) {
+  const logDir = path.resolve("./logs");
+  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
+  const logFile = path.join(logDir, "paystack_webhook.log");
+  fs.appendFileSync(
+    logFile,
+    `${new Date().toISOString()} - ${message} - ${JSON.stringify(data)}\n`
+  );
+}
 
 // =================================================
 // ✅ HEALTH CHECK
 // =================================================
-app.get("/", (req, res) => {
-  res.send("Calevid backend is running");
-});
+app.get("/", (req, res) => res.send("Calevid backend is running"));
+app.get("/status/test", (req, res) => res.json({ status: "Node backend is running" }));
 
 // =================================================
-// ✅ PAYSTACK PAYMENT VERIFICATION
+// ✅ PAYSTACK WEBHOOK
 // =================================================
-app.post("/verify-payment", async (req, res) => {
-  const { reference } = req.body;
+app.post("/paystack-webhook", async (req, res) => {
+  const secret = process.env.PAYSTACK_SECRET_KEY;
+  if (!secret) return res.sendStatus(500);
 
-  if (!reference) {
-    return res.status(400).json({
-      status: "error",
-      message: "Payment reference is required",
-    });
+  const signature = req.headers["x-paystack-signature"];
+  const hash = crypto.createHmac("sha512", secret).update(req.body).digest("hex");
+
+  if (hash !== signature) {
+    logWebhook("Invalid signature", { headers: req.headers });
+    return res.status(401).send("Invalid signature");
   }
+
+  let event;
+  try {
+    event = JSON.parse(req.body.toString());
+  } catch (err) {
+    logWebhook("Invalid JSON", { error: err });
+    return res.sendStatus(400);
+  }
+
+  if (event.event !== "charge.success") return res.sendStatus(200);
+
+  const data = event.data;
+  const reference = data.reference;
+  const email = data.customer.email;
+  const amountKes = data.amount / 100;
 
   try {
-    const response = await fetch(
-      `https://api.paystack.co/transaction/verify/${reference}`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    const result = await response.json();
-    console.log("PAYSTACK RESPONSE:", result);
-
-    if (result.status && result.data.status === "success") {
-      return res.json({
-        status: "success",
-        message: "Payment verified",
-        data: {
-          amount: result.data.amount,
-          currency: result.data.currency,
-          email: result.data.customer.email,
-          reference: result.data.reference,
-        },
-      });
-    }
-
-    return res.status(400).json({
-      status: "failed",
-      message: "Payment not successful",
+    // Call WordPress AJAX to apply credits
+    const response = await fetch(`${WP_SITE_URL}/wp-admin/admin-ajax.php`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "calevid_verify_payment", reference }),
     });
-  } catch (error) {
-    console.error("PAYSTACK ERROR:", error);
-    return res.status(500).json({
-      status: "error",
-      message: "Server error verifying payment",
-    });
+
+    if (!response.ok) logWebhook("Failed to credit user", { reference, email });
+
+    logWebhook("Webhook processed", { reference, email, amountKes });
+    return res.sendStatus(200);
+  } catch (err) {
+    logWebhook("Webhook processing error", { error: err });
+    return res.sendStatus(500);
   }
 });
 
 // =================================================
-// ✅ FAL.AI / OVI VIDEO GENERATION (REAL)
+// ✅ VERIFY PAYMENT
+// =================================================
+app.post("/verify-payment", (req, res) => {
+  const { reference } = req.body;
+  if (!reference) return res.status(400).json({ status: "error", message: "Reference required" });
+
+  return res.json({ status: "pending", message: "Payment received, awaiting credit", reference });
+});
+
+// =================================================
+// ✅ VIDEO GENERATION
 // =================================================
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
+    if (!prompt) return res.status(400).json({ status: "error", message: "Prompt required" });
 
-    if (!prompt) {
-      return res.status(400).json({
-        status: "error",
-        message: "Prompt is required",
-      });
-    }
+    const result = await fal.subscribe("fal-ai/ovi", { input: { prompt }, logs: true });
+    const videoUrl = result?.data?.video?.url;
 
-    console.log("VIDEO PROMPT:", prompt);
+    if (!videoUrl) return res.status(500).json({ status: "error", message: "Video URL not found", raw: result });
 
-    const result = await fal.subscribe("fal-ai/ovi", {
-      input: {
-        prompt: prompt,
-      },
-    });
-
-    console.log("FAL RESPONSE:", result);
-
-    if (!result?.data?.video?.url) {
-      return res.status(500).json({
-        status: "error",
-        message: "Video generation failed",
-      });
-    }
-
-    return res.json({
-      status: "success",
-      videoUrl: result.data.video.url,
-      requestId: result.requestId,
-    });
-  } catch (error) {
-    console.error("FAL AI ERROR:", error);
-
-    return res.status(500).json({
-      status: "error",
-      message: "Fal.ai video generation failed",
-      error: error?.message || error,
-    });
+    return res.json({ status: "success", videoUrl, requestId: result.requestId });
+  } catch (err) {
+    logWebhook("Fal.ai video generation error", { error: err });
+    return res.status(500).json({ status: "error", message: "Fal.ai generation failed" });
   }
 });
 
 // =================================================
-// ✅ SERVER START
+// ✅ START SERVER
 // =================================================
-app.listen(PORT, () => {
-  console.log(`Calevid backend running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Calevid backend running on port ${PORT}`));
