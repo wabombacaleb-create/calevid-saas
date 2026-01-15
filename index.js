@@ -57,15 +57,15 @@ app.get("/status/test", (req, res) => res.json({ status: "Node backend is runnin
 // ✅ PAYSTACK WEBHOOK
 // =================================================
 app.post("/paystack-webhook", async (req, res) => {
-  const secret = process.env.PAYSTACK_SECRET_KEY;
-
-  let bodyString = req.body.toString("utf8");
+  const bodyString = req.body.toString("utf8");
 
   // ------------------------
   // TEST MODE BYPASS
   // ------------------------
-  // If TEST_WEBHOOK_BYPASS=true, skip signature check
-  if (!process.env.TEST_WEBHOOK_BYPASS) {
+  const TEST_BYPASS = process.env.TEST_WEBHOOK_BYPASS === "true";
+
+  if (!TEST_BYPASS) {
+    const secret = process.env.PAYSTACK_SECRET_KEY;
     if (!secret) return res.sendStatus(500);
 
     const signature = req.headers["x-paystack-signature"] || "";
@@ -97,22 +97,26 @@ app.post("/paystack-webhook", async (req, res) => {
   const email = data.customer.email;
   const amountKes = data.amount / 100;
 
-  try {
-    // Call WordPress AJAX to apply credits
-    const response = await fetch(`${WP_SITE_URL}/wp-admin/admin-ajax.php`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "calevid_verify_payment", reference }),
-    });
+  // -----------------------------
+  // Skip WordPress call in TEST mode
+  // -----------------------------
+  if (!TEST_BYPASS) {
+    try {
+      const response = await fetch(`${WP_SITE_URL}/wp-admin/admin-ajax.php`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "calevid_verify_payment", reference }),
+      });
 
-    if (!response.ok) logWebhook("Failed to credit user", { reference, email });
-
-    logWebhook("Webhook processed", { reference, email, amountKes });
-    return res.sendStatus(200);
-  } catch (err) {
-    logWebhook("Webhook processing error", { error: err });
-    return res.sendStatus(500);
+      if (!response.ok) logWebhook("Failed to credit user", { reference, email });
+    } catch (err) {
+      logWebhook("Webhook processing error", { error: err });
+      return res.sendStatus(500);
+    }
   }
+
+  logWebhook("Webhook processed", { reference, email, amountKes });
+  return res.sendStatus(200);
 });
 
 // =================================================
