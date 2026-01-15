@@ -24,7 +24,7 @@ app.use((req, res, next) => {
   express.json()(req, res, next);
 });
 
-// Raw body ONLY for Paystack webhook
+// Raw body for webhook route
 app.use("/paystack-webhook", express.raw({ type: "application/json" }));
 
 // =================================================
@@ -36,10 +36,8 @@ fal.config({ credentials: process.env.FAL_KEY });
 // ✅ LOGGING UTILITY
 // =================================================
 function logWebhook(message, data = {}) {
-  // Log to console (for free Render instances)
-  console.log(message, data);
+  console.log(message, data); // Console logs for free Render instances
 
-  // Log to file
   const logDir = path.resolve("./logs");
   if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
   const logFile = path.join(logDir, "paystack_webhook.log");
@@ -60,19 +58,33 @@ app.get("/status/test", (req, res) => res.json({ status: "Node backend is runnin
 // =================================================
 app.post("/paystack-webhook", async (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
-  if (!secret) return res.sendStatus(500);
 
-  const signature = req.headers["x-paystack-signature"];
-  const hash = crypto.createHmac("sha512", secret).update(req.body).digest("hex");
+  let bodyString = req.body.toString("utf8");
 
-  if (hash !== signature) {
-    logWebhook("Invalid signature", { headers: req.headers });
-    return res.status(401).send("Invalid signature");
+  // ------------------------
+  // TEST MODE BYPASS
+  // ------------------------
+  // If TEST_WEBHOOK_BYPASS=true, skip signature check
+  if (!process.env.TEST_WEBHOOK_BYPASS) {
+    if (!secret) return res.sendStatus(500);
+
+    const signature = req.headers["x-paystack-signature"] || "";
+    const hash = crypto.createHmac("sha512", secret)
+                       .update(bodyString)
+                       .digest("hex");
+
+    if (hash !== signature) {
+      logWebhook("Invalid signature", { headers: req.headers, hash, signature });
+      return res.status(401).send("Invalid signature");
+    }
   }
 
+  // ------------------------
+  // Parse webhook JSON
+  // ------------------------
   let event;
   try {
-    event = JSON.parse(req.body.toString());
+    event = JSON.parse(bodyString);
   } catch (err) {
     logWebhook("Invalid JSON", { error: err });
     return res.sendStatus(400);
