@@ -18,8 +18,7 @@ const WP_SITE_URL = process.env.WP_SITE_URL;
 // =================================================
 app.use(cors());
 
-// ❗ IMPORTANT FIX
-// Exclude Paystack webhook from JSON parsing
+// Only parse JSON for non-webhook routes
 app.use((req, res, next) => {
   if (req.originalUrl === "/paystack-webhook") return next();
   express.json()(req, res, next);
@@ -37,6 +36,10 @@ fal.config({ credentials: process.env.FAL_KEY });
 // ✅ LOGGING UTILITY
 // =================================================
 function logWebhook(message, data = {}) {
+  // Log to console (for free Render instances)
+  console.log(message, data);
+
+  // Log to file
   const logDir = path.resolve("./logs");
   if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
   const logFile = path.join(logDir, "paystack_webhook.log");
@@ -50,24 +53,17 @@ function logWebhook(message, data = {}) {
 // ✅ HEALTH CHECK
 // =================================================
 app.get("/", (req, res) => res.send("Calevid backend is running"));
-app.get("/status/test", (req, res) =>
-  res.json({ status: "Node backend is running" })
-);
+app.get("/status/test", (req, res) => res.json({ status: "Node backend is running" }));
 
 // =================================================
-// ✅ PAYSTACK WEBHOOK (FIXED)
+// ✅ PAYSTACK WEBHOOK
 // =================================================
 app.post("/paystack-webhook", async (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
   if (!secret) return res.sendStatus(500);
 
   const signature = req.headers["x-paystack-signature"];
-
-  // ✅ req.body is now a BUFFER (not object)
-  const hash = crypto
-    .createHmac("sha512", secret)
-    .update(req.body)
-    .digest("hex");
+  const hash = crypto.createHmac("sha512", secret).update(req.body).digest("hex");
 
   if (hash !== signature) {
     logWebhook("Invalid signature", { headers: req.headers });
@@ -90,18 +86,14 @@ app.post("/paystack-webhook", async (req, res) => {
   const amountKes = data.amount / 100;
 
   try {
+    // Call WordPress AJAX to apply credits
     const response = await fetch(`${WP_SITE_URL}/wp-admin/admin-ajax.php`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "calevid_verify_payment",
-        reference,
-      }),
+      body: JSON.stringify({ action: "calevid_verify_payment", reference }),
     });
 
-    if (!response.ok) {
-      logWebhook("Failed to credit user", { reference, email });
-    }
+    if (!response.ok) logWebhook("Failed to credit user", { reference, email });
 
     logWebhook("Webhook processed", { reference, email, amountKes });
     return res.sendStatus(200);
@@ -116,16 +108,9 @@ app.post("/paystack-webhook", async (req, res) => {
 // =================================================
 app.post("/verify-payment", (req, res) => {
   const { reference } = req.body;
-  if (!reference)
-    return res
-      .status(400)
-      .json({ status: "error", message: "Reference required" });
+  if (!reference) return res.status(400).json({ status: "error", message: "Reference required" });
 
-  return res.json({
-    status: "pending",
-    message: "Payment received, awaiting credit",
-    reference,
-  });
+  return res.json({ status: "pending", message: "Payment received, awaiting credit", reference });
 });
 
 // =================================================
@@ -134,40 +119,21 @@ app.post("/verify-payment", (req, res) => {
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
-    if (!prompt)
-      return res
-        .status(400)
-        .json({ status: "error", message: "Prompt required" });
+    if (!prompt) return res.status(400).json({ status: "error", message: "Prompt required" });
 
-    const result = await fal.subscribe("fal-ai/ovi", {
-      input: { prompt },
-      logs: true,
-    });
-
+    const result = await fal.subscribe("fal-ai/ovi", { input: { prompt }, logs: true });
     const videoUrl = result?.data?.video?.url;
-    if (!videoUrl)
-      return res.status(500).json({
-        status: "error",
-        message: "Video URL not found",
-        raw: result,
-      });
 
-    return res.json({
-      status: "success",
-      videoUrl,
-      requestId: result.requestId,
-    });
+    if (!videoUrl) return res.status(500).json({ status: "error", message: "Video URL not found", raw: result });
+
+    return res.json({ status: "success", videoUrl, requestId: result.requestId });
   } catch (err) {
     logWebhook("Fal.ai video generation error", { error: err });
-    return res
-      .status(500)
-      .json({ status: "error", message: "Fal.ai generation failed" });
+    return res.status(500).json({ status: "error", message: "Fal.ai generation failed" });
   }
 });
 
 // =================================================
 // ✅ START SERVER
 // =================================================
-app.listen(PORT, () =>
-  console.log(`Calevid backend running on port ${PORT}`)
-);
+app.listen(PORT, () => console.log(`Calevid backend running on port ${PORT}`));
