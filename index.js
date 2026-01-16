@@ -17,14 +17,7 @@ const WP_SITE_URL = process.env.WP_SITE_URL;
 // ✅ GLOBAL MIDDLEWARE
 // =================================================
 app.use(cors());
-
-// Only parse JSON for non-webhook routes
-app.use((req, res, next) => {
-  if (req.originalUrl === "/paystack-webhook") return next();
-  express.json()(req, res, next);
-});
-
-// Raw body for webhook route
+app.use(express.json());
 app.use("/paystack-webhook", express.raw({ type: "application/json" }));
 
 // =================================================
@@ -36,8 +29,6 @@ fal.config({ credentials: process.env.FAL_KEY });
 // ✅ LOGGING UTILITY
 // =================================================
 function logWebhook(message, data = {}) {
-  console.log(message, data); // Console logs for free Render instances
-
   const logDir = path.resolve("./logs");
   if (!fs.existsSync(logDir)) fs.mkdirSync(logDir);
   const logFile = path.join(logDir, "paystack_webhook.log");
@@ -51,16 +42,19 @@ function logWebhook(message, data = {}) {
 // ✅ HEALTH CHECK
 // =================================================
 app.get("/", (req, res) => res.send("Calevid backend is running"));
-app.get("/status/test", (req, res) => res.json({ status: "Node backend is running" }));
+app.get("/status/test", (req, res) =>
+  res.json({ status: "Node backend is running" })
+);
 
 // =================================================
 // ✅ PAYSTACK WEBHOOK
 // =================================================
 app.post("/paystack-webhook", async (req, res) => {
-  const bodyString = req.body.toString("utf8");
+  const bodyBuffer = req.body;
+  const bodyString = bodyBuffer.toString();
 
   // ------------------------
-  // TEST MODE BYPASS
+  // TEST MODE BYPASS (KEPT)
   // ------------------------
   const TEST_BYPASS = process.env.TEST_WEBHOOK_BYPASS === "true";
 
@@ -69,19 +63,17 @@ app.post("/paystack-webhook", async (req, res) => {
     if (!secret) return res.sendStatus(500);
 
     const signature = req.headers["x-paystack-signature"] || "";
-    const hash = crypto.createHmac("sha512", secret)
-                       .update(bodyString)
-                       .digest("hex");
+    const hash = crypto
+      .createHmac("sha512", secret)
+      .update(bodyBuffer)
+      .digest("hex");
 
     if (hash !== signature) {
-      logWebhook("Invalid signature", { headers: req.headers, hash, signature });
+      logWebhook("Invalid signature", { headers: req.headers });
       return res.status(401).send("Invalid signature");
     }
   }
 
-  // ------------------------
-  // Parse webhook JSON
-  // ------------------------
   let event;
   try {
     event = JSON.parse(bodyString);
@@ -94,29 +86,55 @@ app.post("/paystack-webhook", async (req, res) => {
 
   const data = event.data;
   const reference = data.reference;
-  const email = data.customer.email;
+  const email = data.customer?.email;
   const amountKes = data.amount / 100;
 
-  // -----------------------------
-  // Skip WordPress call in TEST mode
-  // -----------------------------
-  if (!TEST_BYPASS) {
-    try {
-      const response = await fetch(`${WP_SITE_URL}/wp-admin/admin-ajax.php`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "calevid_verify_payment", reference }),
-      });
-
-      if (!response.ok) logWebhook("Failed to credit user", { reference, email });
-    } catch (err) {
-      logWebhook("Webhook processing error", { error: err });
-      return res.sendStatus(500);
+  try {
+    // ============================
+    // ✅ APPLY CREDITS TO WORDPRESS
+    // ============================
+    const credits = Math.floor(amountKes / 150);
+    if (credits <= 0) {
+      logWebhook("Zero credits calculated", { amountKes });
+      return res.sendStatus(200);
     }
-  }
 
-  logWebhook("Webhook processed", { reference, email, amountKes });
-  return res.sendStatus(200);
+    if (!WP_SITE_URL) {
+      throw new Error("WP_SITE_URL not set");
+    }
+
+    const wpRes = await fetch(
+      `${WP_SITE_URL}/wp-admin/admin-ajax.php?action=calevid_apply_credits`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          secret: process.env.CALEVID_WEBHOOK_SECRET || "",
+          email,
+          credits: String(credits),
+          reference,
+        }),
+      }
+    );
+
+    const wpText = await wpRes.text();
+
+    logWebhook("Webhook processed", {
+      reference,
+      email,
+      amountKes,
+      credits,
+      wpStatus: wpRes.status,
+      wpResponse: wpText,
+    });
+
+    return res.sendStatus(200);
+  } catch (err) {
+    logWebhook("Webhook processing error", { error: err.message });
+    return res.sendStatus(500);
+  }
 });
 
 // =================================================
@@ -124,9 +142,16 @@ app.post("/paystack-webhook", async (req, res) => {
 // =================================================
 app.post("/verify-payment", (req, res) => {
   const { reference } = req.body;
-  if (!reference) return res.status(400).json({ status: "error", message: "Reference required" });
+  if (!reference)
+    return res
+      .status(400)
+      .json({ status: "error", message: "Reference required" });
 
-  return res.json({ status: "pending", message: "Payment received, awaiting credit", reference });
+  return res.json({
+    status: "pending",
+    message: "Payment received, awaiting credit",
+    reference,
+  });
 });
 
 // =================================================
@@ -135,21 +160,41 @@ app.post("/verify-payment", (req, res) => {
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
-    if (!prompt) return res.status(400).json({ status: "error", message: "Prompt required" });
+    if (!prompt)
+      return res
+        .status(400)
+        .json({ status: "error", message: "Prompt required" });
 
-    const result = await fal.subscribe("fal-ai/ovi", { input: { prompt }, logs: true });
+    const result = await fal.subscribe("fal-ai/ovi", {
+      input: { prompt },
+      logs: true,
+    });
+
     const videoUrl = result?.data?.video?.url;
 
-    if (!videoUrl) return res.status(500).json({ status: "error", message: "Video URL not found", raw: result });
+    if (!videoUrl)
+      return res.status(500).json({
+        status: "error",
+        message: "Video URL not found",
+        raw: result,
+      });
 
-    return res.json({ status: "success", videoUrl, requestId: result.requestId });
+    return res.json({
+      status: "success",
+      videoUrl,
+      requestId: result.requestId,
+    });
   } catch (err) {
-    logWebhook("Fal.ai video generation error", { error: err });
-    return res.status(500).json({ status: "error", message: "Fal.ai generation failed" });
+    logWebhook("Fal.ai video generation error", { error: err.message });
+    return res
+      .status(500)
+      .json({ status: "error", message: "Fal.ai generation failed" });
   }
 });
 
 // =================================================
 // ✅ START SERVER
 // =================================================
-app.listen(PORT, () => console.log(`Calevid backend running on port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`Calevid backend running on port ${PORT}`)
+);
