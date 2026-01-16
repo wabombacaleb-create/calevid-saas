@@ -50,11 +50,10 @@ app.get("/status/test", (req, res) =>
 // ✅ PAYSTACK WEBHOOK
 // =================================================
 app.post("/paystack-webhook", async (req, res) => {
-  const bodyBuffer = req.body;
-  const bodyString = bodyBuffer.toString();
+  const bodyString = req.body.toString();
 
   // ------------------------
-  // TEST MODE BYPASS (KEPT)
+  // TEST MODE BYPASS
   // ------------------------
   const TEST_BYPASS = process.env.TEST_WEBHOOK_BYPASS === "true";
 
@@ -63,10 +62,9 @@ app.post("/paystack-webhook", async (req, res) => {
     if (!secret) return res.sendStatus(500);
 
     const signature = req.headers["x-paystack-signature"] || "";
-    const hash = crypto
-      .createHmac("sha512", secret)
-      .update(bodyBuffer)
-      .digest("hex");
+    const hash = crypto.createHmac("sha512", secret)
+                       .update(bodyString)
+                       .digest("hex");
 
     if (hash !== signature) {
       logWebhook("Invalid signature", { headers: req.headers });
@@ -74,6 +72,7 @@ app.post("/paystack-webhook", async (req, res) => {
     }
   }
 
+  // Parse event
   let event;
   try {
     event = JSON.parse(bodyString);
@@ -86,53 +85,41 @@ app.post("/paystack-webhook", async (req, res) => {
 
   const data = event.data;
   const reference = data.reference;
-  const email = data.customer?.email;
+  const email = data.customer.email;
   const amountKes = data.amount / 100;
 
   try {
     // ============================
     // ✅ APPLY CREDITS TO WORDPRESS
     // ============================
-    const credits = Math.floor(amountKes / 150);
-    if (credits <= 0) {
-      logWebhook("Zero credits calculated", { amountKes });
-      return res.sendStatus(200);
-    }
-
-    if (!WP_SITE_URL) {
-      throw new Error("WP_SITE_URL not set");
-    }
-
-    const wpRes = await fetch(
+    const credits = Math.floor(amountKes / 150); // KES → credits
+    const wpResponse = await fetch(
       `${WP_SITE_URL}/wp-admin/admin-ajax.php?action=calevid_apply_credits`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          secret: process.env.CALEVID_WEBHOOK_SECRET || "",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          secret: process.env.CALEVID_WEBHOOK_SECRET, // must match wp-config.php
           email,
-          credits: String(credits),
+          credits,
           reference,
         }),
       }
     );
 
-    const wpText = await wpRes.text();
+    const wpResult = await wpResponse.json();
 
     logWebhook("Webhook processed", {
       reference,
       email,
       amountKes,
       credits,
-      wpStatus: wpRes.status,
-      wpResponse: wpText,
+      wpResult,
     });
 
     return res.sendStatus(200);
   } catch (err) {
-    logWebhook("Webhook processing error", { error: err.message });
+    logWebhook("Webhook processing error", { error: err });
     return res.sendStatus(500);
   }
 });
@@ -165,11 +152,7 @@ app.post("/generate-video", async (req, res) => {
         .status(400)
         .json({ status: "error", message: "Prompt required" });
 
-    const result = await fal.subscribe("fal-ai/ovi", {
-      input: { prompt },
-      logs: true,
-    });
-
+    const result = await fal.subscribe("fal-ai/ovi", { input: { prompt }, logs: true });
     const videoUrl = result?.data?.video?.url;
 
     if (!videoUrl)
@@ -179,13 +162,9 @@ app.post("/generate-video", async (req, res) => {
         raw: result,
       });
 
-    return res.json({
-      status: "success",
-      videoUrl,
-      requestId: result.requestId,
-    });
+    return res.json({ status: "success", videoUrl, requestId: result.requestId });
   } catch (err) {
-    logWebhook("Fal.ai video generation error", { error: err.message });
+    logWebhook("Fal.ai video generation error", { error: err });
     return res
       .status(500)
       .json({ status: "error", message: "Fal.ai generation failed" });
@@ -195,6 +174,4 @@ app.post("/generate-video", async (req, res) => {
 // =================================================
 // ✅ START SERVER
 // =================================================
-app.listen(PORT, () =>
-  console.log(`Calevid backend running on port ${PORT}`)
-);
+app.listen(PORT, () => console.log(`Calevid backend running on port ${PORT}`));
