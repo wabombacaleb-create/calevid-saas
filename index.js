@@ -72,7 +72,6 @@ app.post("/paystack-webhook", async (req, res) => {
     }
   }
 
-  // Parse event
   let event;
   try {
     event = JSON.parse(bodyString);
@@ -92,14 +91,25 @@ app.post("/paystack-webhook", async (req, res) => {
     // ============================
     // ✅ APPLY CREDITS TO WORDPRESS
     // ============================
-    const credits = Math.floor(amountKes / 150); // KES → credits
+    const perCreditPrice = 150; // KES per credit
+    const credits = Math.floor(amountKes / perCreditPrice);
+
+    logWebhook("Credit calculation", { reference, email, amountKes, credits });
+
+    // Skip if zero credits (should never happen if payment is valid)
+    if (credits <= 0) {
+      logWebhook("No credits to apply", { reference, amountKes, credits });
+      return res.sendStatus(200);
+    }
+
+    // Apply credits via WP AJAX endpoint
     const wpResponse = await fetch(
       `${WP_SITE_URL}/wp-admin/admin-ajax.php?action=calevid_apply_credits`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          secret: process.env.CALEVID_WEBHOOK_SECRET, // must match wp-config.php
+          secret: process.env.CALEVID_WEBHOOK_SECRET,
           email,
           credits,
           reference,
@@ -108,14 +118,7 @@ app.post("/paystack-webhook", async (req, res) => {
     );
 
     const wpResult = await wpResponse.json();
-
-    logWebhook("Webhook processed", {
-      reference,
-      email,
-      amountKes,
-      credits,
-      wpResult,
-    });
+    logWebhook("Webhook processed", { reference, email, amountKes, credits, wpResult });
 
     return res.sendStatus(200);
   } catch (err) {
