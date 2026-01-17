@@ -47,7 +47,7 @@ app.get("/status/test", (req, res) =>
 );
 
 // =================================================
-// PAYSTACK WEBHOOK (FIXED)
+// PAYSTACK WEBHOOK (FULLY FIXED)
 // =================================================
 app.post("/paystack-webhook", (req, res) => {
   const bodyBuffer = req.body;
@@ -55,9 +55,14 @@ app.post("/paystack-webhook", (req, res) => {
 
   const TEST_BYPASS = process.env.TEST_WEBHOOK_BYPASS === "true";
 
+  logWebhook("Webhook received", { headers: req.headers, body: bodyString });
+
   if (!TEST_BYPASS) {
     const secret = process.env.PAYSTACK_SECRET_KEY;
-    if (!secret) return res.sendStatus(500);
+    if (!secret) {
+      logWebhook("No PAYSTACK_SECRET_KEY set");
+      return res.sendStatus(500);
+    }
 
     const signature = req.headers["x-paystack-signature"] || "";
     const hash = crypto
@@ -66,7 +71,7 @@ app.post("/paystack-webhook", (req, res) => {
       .digest("hex");
 
     if (hash !== signature) {
-      logWebhook("Invalid signature", {});
+      logWebhook("Invalid signature", { signature, hash });
       return res.sendStatus(401);
     }
   }
@@ -74,11 +79,12 @@ app.post("/paystack-webhook", (req, res) => {
   let event;
   try {
     event = JSON.parse(bodyString);
-  } catch {
+  } catch (err) {
+    logWebhook("Invalid JSON", { error: err.message });
     return res.sendStatus(400);
   }
 
-  // ✅ IMMEDIATE ACK TO PAYSTACK (CRITICAL FIX)
+  // ✅ IMMEDIATE ACK TO PAYSTACK
   res.sendStatus(200);
 
   if (event.event !== "charge.success") return;
@@ -91,7 +97,7 @@ app.post("/paystack-webhook", (req, res) => {
   const credits = Math.floor(amountKes / 150);
   if (!email || credits <= 0) return;
 
-  // ✅ ASYNC WORDPRESS CREDIT APPLICATION
+  // ✅ ASYNC: Send to WordPress
   setImmediate(async () => {
     try {
       const wpRes = await fetch(
@@ -107,7 +113,7 @@ app.post("/paystack-webhook", (req, res) => {
             credits: String(credits),
             reference,
           }),
-          timeout: 5000,
+          timeout: 20000, // 20s timeout
         }
       );
 
@@ -132,7 +138,9 @@ app.post("/paystack-webhook", (req, res) => {
 app.post("/verify-payment", (req, res) => {
   const { reference } = req.body;
   if (!reference)
-    return res.status(400).json({ status: "error", message: "Reference required" });
+    return res
+      .status(400)
+      .json({ status: "error", message: "Reference required" });
 
   return res.json({
     status: "pending",
@@ -148,7 +156,9 @@ app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
     if (!prompt)
-      return res.status(400).json({ status: "error", message: "Prompt required" });
+      return res
+        .status(400)
+        .json({ status: "error", message: "Prompt required" });
 
     const result = await fal.subscribe("fal-ai/ovi", {
       input: { prompt },
@@ -157,7 +167,9 @@ app.post("/generate-video", async (req, res) => {
 
     const videoUrl = result?.data?.video?.url;
     if (!videoUrl)
-      return res.status(500).json({ status: "error", message: "Video failed" });
+      return res
+        .status(500)
+        .json({ status: "error", message: "Video failed" });
 
     return res.json({
       status: "success",
@@ -165,7 +177,9 @@ app.post("/generate-video", async (req, res) => {
       requestId: result.requestId,
     });
   } catch (err) {
-    return res.status(500).json({ status: "error", message: "Generation failed" });
+    return res
+      .status(500)
+      .json({ status: "error", message: "Generation failed" });
   }
 });
 
