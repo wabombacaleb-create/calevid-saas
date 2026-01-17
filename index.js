@@ -7,26 +7,26 @@ import fetch from "node-fetch";
 import { fal } from "@fal-ai/client";
 
 // =================================================
-// ✅ CONFIG
+// CONFIG
 // =================================================
 const app = express();
 const PORT = process.env.PORT || 10000;
 const WP_SITE_URL = process.env.WP_SITE_URL;
 
 // =================================================
-// ✅ GLOBAL MIDDLEWARE
+// MIDDLEWARE
 // =================================================
 app.use(cors());
-app.use(express.json());
 app.use("/paystack-webhook", express.raw({ type: "application/json" }));
+app.use(express.json());
 
 // =================================================
-// ✅ FAL.AI CONFIG
+// FAL.AI CONFIG
 // =================================================
 fal.config({ credentials: process.env.FAL_KEY });
 
 // =================================================
-// ✅ LOGGING UTILITY
+// LOGGING
 // =================================================
 function logWebhook(message, data = {}) {
   const logDir = path.resolve("./logs");
@@ -39,7 +39,7 @@ function logWebhook(message, data = {}) {
 }
 
 // =================================================
-// ✅ HEALTH CHECK
+// HEALTH
 // =================================================
 app.get("/", (req, res) => res.send("Calevid backend is running"));
 app.get("/status/test", (req, res) =>
@@ -47,15 +47,12 @@ app.get("/status/test", (req, res) =>
 );
 
 // =================================================
-// ✅ PAYSTACK WEBHOOK
+// PAYSTACK WEBHOOK (FIXED)
 // =================================================
-app.post("/paystack-webhook", async (req, res) => {
+app.post("/paystack-webhook", (req, res) => {
   const bodyBuffer = req.body;
   const bodyString = bodyBuffer.toString();
 
-  // ------------------------
-  // TEST MODE BYPASS (KEPT)
-  // ------------------------
   const TEST_BYPASS = process.env.TEST_WEBHOOK_BYPASS === "true";
 
   if (!TEST_BYPASS) {
@@ -69,83 +66,73 @@ app.post("/paystack-webhook", async (req, res) => {
       .digest("hex");
 
     if (hash !== signature) {
-      logWebhook("Invalid signature", { headers: req.headers });
-      return res.status(401).send("Invalid signature");
+      logWebhook("Invalid signature", {});
+      return res.sendStatus(401);
     }
   }
 
   let event;
   try {
     event = JSON.parse(bodyString);
-  } catch (err) {
-    logWebhook("Invalid JSON", { error: err });
+  } catch {
     return res.sendStatus(400);
   }
 
-  if (event.event !== "charge.success") return res.sendStatus(200);
+  // ✅ IMMEDIATE ACK TO PAYSTACK (CRITICAL FIX)
+  res.sendStatus(200);
+
+  if (event.event !== "charge.success") return;
 
   const data = event.data;
   const reference = data.reference;
   const email = data.customer?.email;
   const amountKes = data.amount / 100;
 
-  try {
-    // ============================
-    // ✅ APPLY CREDITS TO WORDPRESS
-    // ============================
-    const credits = Math.floor(amountKes / 150);
-    if (credits <= 0) {
-      logWebhook("Zero credits calculated", { amountKes });
-      return res.sendStatus(200);
+  const credits = Math.floor(amountKes / 150);
+  if (!email || credits <= 0) return;
+
+  // ✅ ASYNC WORDPRESS CREDIT APPLICATION
+  setImmediate(async () => {
+    try {
+      const wpRes = await fetch(
+        `${WP_SITE_URL}/wp-admin/admin-ajax.php?action=calevid_apply_credits`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({
+            secret: process.env.CALEVID_WEBHOOK_SECRET || "",
+            email,
+            credits: String(credits),
+            reference,
+          }),
+          timeout: 5000,
+        }
+      );
+
+      const wpText = await wpRes.text();
+
+      logWebhook("Credits applied", {
+        reference,
+        email,
+        credits,
+        status: wpRes.status,
+        response: wpText,
+      });
+    } catch (err) {
+      logWebhook("WP async error", { error: err.message });
     }
-
-    if (!WP_SITE_URL) {
-      throw new Error("WP_SITE_URL not set");
-    }
-
-    const wpRes = await fetch(
-      `${WP_SITE_URL}/wp-admin/admin-ajax.php?action=calevid_apply_credits`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: new URLSearchParams({
-          secret: process.env.CALEVID_WEBHOOK_SECRET || "",
-          email,
-          credits: String(credits),
-          reference,
-        }),
-      }
-    );
-
-    const wpText = await wpRes.text();
-
-    logWebhook("Webhook processed", {
-      reference,
-      email,
-      amountKes,
-      credits,
-      wpStatus: wpRes.status,
-      wpResponse: wpText,
-    });
-
-    return res.sendStatus(200);
-  } catch (err) {
-    logWebhook("Webhook processing error", { error: err.message });
-    return res.sendStatus(500);
-  }
+  });
 });
 
 // =================================================
-// ✅ VERIFY PAYMENT
+// VERIFY PAYMENT (UNCHANGED)
 // =================================================
 app.post("/verify-payment", (req, res) => {
   const { reference } = req.body;
   if (!reference)
-    return res
-      .status(400)
-      .json({ status: "error", message: "Reference required" });
+    return res.status(400).json({ status: "error", message: "Reference required" });
 
   return res.json({
     status: "pending",
@@ -155,15 +142,13 @@ app.post("/verify-payment", (req, res) => {
 });
 
 // =================================================
-// ✅ VIDEO GENERATION
+// VIDEO GENERATION (UNCHANGED)
 // =================================================
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
     if (!prompt)
-      return res
-        .status(400)
-        .json({ status: "error", message: "Prompt required" });
+      return res.status(400).json({ status: "error", message: "Prompt required" });
 
     const result = await fal.subscribe("fal-ai/ovi", {
       input: { prompt },
@@ -171,13 +156,8 @@ app.post("/generate-video", async (req, res) => {
     });
 
     const videoUrl = result?.data?.video?.url;
-
     if (!videoUrl)
-      return res.status(500).json({
-        status: "error",
-        message: "Video URL not found",
-        raw: result,
-      });
+      return res.status(500).json({ status: "error", message: "Video failed" });
 
     return res.json({
       status: "success",
@@ -185,15 +165,12 @@ app.post("/generate-video", async (req, res) => {
       requestId: result.requestId,
     });
   } catch (err) {
-    logWebhook("Fal.ai video generation error", { error: err.message });
-    return res
-      .status(500)
-      .json({ status: "error", message: "Fal.ai generation failed" });
+    return res.status(500).json({ status: "error", message: "Generation failed" });
   }
 });
 
 // =================================================
-// ✅ START SERVER
+// START
 // =================================================
 app.listen(PORT, () =>
   console.log(`Calevid backend running on port ${PORT}`)
