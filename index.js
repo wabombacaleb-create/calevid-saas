@@ -7,8 +7,7 @@ import dns from "dns";
 import { fal } from "@fal-ai/client";
 
 /**
- * 🔧 FORCE IPV4 (CRITICAL FIX)
- * Render sometimes prefers IPv6, Hostinger may not accept it
+ * 🔧 FORCE IPV4 (Render sometimes prefers IPv6, Hostinger may not accept it)
  */
 dns.setDefaultResultOrder("ipv4first");
 
@@ -16,11 +15,10 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const WP_SITE_URL = process.env.WP_SITE_URL.replace(/\/+$/, "");
 
-// HTTPS agent with keep-alive and IPv4
 const httpsAgent = new https.Agent({
   keepAlive: true,
   rejectUnauthorized: true,
-  family: 4,
+  family: 4, // 🔥 FORCE IPV4
 });
 
 app.use(cors());
@@ -42,8 +40,8 @@ app.get("/status/test", (req, res) => {
 });
 
 // =================================================
-// PAYSTACK WEBHOOK (REST endpoint)
- // =================================================
+// PAYSTACK WEBHOOK
+// =================================================
 app.post("/paystack-webhook", (req, res) => {
   log("🔥 PAYSTACK WEBHOOK HIT");
 
@@ -68,7 +66,7 @@ app.post("/paystack-webhook", (req, res) => {
     return res.sendStatus(400);
   }
 
-  // ✅ Immediate 200 to Paystack
+  // Immediate acknowledgment to Paystack
   res.sendStatus(200);
 
   if (event.event !== "charge.success") return;
@@ -83,40 +81,36 @@ app.post("/paystack-webhook", (req, res) => {
 
   log("Processing credits", { email, credits, reference });
 
-  // Use REST endpoint for credit application
+  // =================================================
+  // CALL WORDPRESS REST ENDPOINT (GET)
+  // =================================================
   setImmediate(async () => {
-    const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
+    const url = new URL(`${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`);
+    url.searchParams.append("secret", process.env.CALEVID_WEBHOOK_SECRET);
+    url.searchParams.append("email", email);
+    url.searchParams.append("credits", String(credits));
+    url.searchParams.append("reference", reference);
 
-    log("Calling WordPress REST endpoint:", url);
+    log("Calling WordPress REST endpoint:", url.toString());
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), 20000); // 20s timeout
 
     try {
-      const wpRes = await fetch(url, {
-        method: "POST",
+      const wpRes = await fetch(url.toString(), {
+        method: "GET",
         agent: httpsAgent,
         signal: controller.signal,
         headers: {
-          "Content-Type": "application/json",
           "User-Agent": "Calevid-Webhook/1.0 (+https://calevid.com)",
           Accept: "application/json",
         },
-        body: JSON.stringify({
-          secret: process.env.CALEVID_WEBHOOK_SECRET,
-          email,
-          credits,
-          reference,
-        }),
       });
 
-      const text = await wpRes.text();
-
+      const json = await wpRes.json();
       log("✅ WordPress responded", {
         status: wpRes.status,
-        statusText: wpRes.statusText,
-        headers: Object.fromEntries(wpRes.headers.entries()),
-        body: text,
+        body: json,
       });
     } catch (err) {
       log("❌ WordPress request failed", {
@@ -166,6 +160,9 @@ app.post("/generate-video", async (req, res) => {
   }
 });
 
+// =================================================
+// START SERVER
+// =================================================
 app.listen(PORT, () =>
   log(`🚀 Calevid backend running on port ${PORT}`)
 );
