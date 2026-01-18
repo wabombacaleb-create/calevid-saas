@@ -2,11 +2,17 @@ import express from "express";
 import cors from "cors";
 import crypto from "crypto";
 import fetch from "node-fetch";
+import https from "https";
 import { fal } from "@fal-ai/client";
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const WP_SITE_URL = (process.env.WP_SITE_URL || "").replace(/\/$/, "");
+const WP_SITE_URL = process.env.WP_SITE_URL.replace(/\/+$/, "");
+
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  rejectUnauthorized: true,
+});
 
 app.use(cors());
 app.use("/paystack-webhook", express.raw({ type: "application/json" }));
@@ -32,13 +38,12 @@ app.get("/status/test", (req, res) => {
 app.post("/paystack-webhook", (req, res) => {
   log("🔥 PAYSTACK WEBHOOK HIT");
 
-  const bodyBuffer = req.body;
+  const body = req.body;
   const signature = req.headers["x-paystack-signature"];
 
-  const secret = process.env.PAYSTACK_SECRET_KEY;
   const hash = crypto
-    .createHmac("sha512", secret)
-    .update(bodyBuffer)
+    .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY)
+    .update(body)
     .digest("hex");
 
   if (hash !== signature) {
@@ -48,7 +53,7 @@ app.post("/paystack-webhook", (req, res) => {
 
   let event;
   try {
-    event = JSON.parse(bodyBuffer.toString());
+    event = JSON.parse(body.toString());
   } catch {
     return res.sendStatus(400);
   }
@@ -63,23 +68,25 @@ app.post("/paystack-webhook", (req, res) => {
   const email = customer?.email;
   const credits = Math.floor(amount / 100 / 150);
 
-  if (!email || credits <= 0) {
-    log("Invalid credit data");
-    return;
-  }
+  if (!email || credits <= 0) return;
 
   log("Processing credits", { email, credits, reference });
 
   setImmediate(async () => {
+    const url =
+      `${WP_SITE_URL}/wp-admin/admin-ajax.php?action=calevid_apply_credits`;
+
+    log("Calling WordPress:", url);
+
     try {
-      const url =
-        `${WP_SITE_URL}/wp-admin/admin-ajax.php?action=calevid_apply_credits`;
-
-      log("Calling WordPress:", url);
-
       const wpRes = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        agent: httpsAgent,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Calevid-Webhook/1.0 (+https://calevid.com)",
+          "Accept": "application/json",
+        },
         body: new URLSearchParams({
           secret: process.env.CALEVID_WEBHOOK_SECRET,
           email,
@@ -90,7 +97,7 @@ app.post("/paystack-webhook", (req, res) => {
 
       const text = await wpRes.text();
 
-      log("✅ WordPress response", {
+      log("✅ WordPress responded", {
         status: wpRes.status,
         body: text,
       });
@@ -118,13 +125,13 @@ app.post("/generate-video", async (req, res) => {
     if (!videoUrl)
       return res.status(500).json({ status: "error", message: "Video failed" });
 
-    return res.json({
+    res.json({
       status: "success",
       videoUrl,
       requestId: result.requestId,
     });
   } catch {
-    return res.status(500).json({ status: "error", message: "Generation failed" });
+    res.status(500).json({ status: "error", message: "Generation failed" });
   }
 });
 
