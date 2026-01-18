@@ -3,7 +3,14 @@ import cors from "cors";
 import crypto from "crypto";
 import fetch from "node-fetch";
 import https from "https";
+import dns from "dns";
 import { fal } from "@fal-ai/client";
+
+/**
+ * 🔧 FORCE IPV4 (CRITICAL FIX)
+ * Render sometimes prefers IPv6, Hostinger may not accept it
+ */
+dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -12,6 +19,7 @@ const WP_SITE_URL = process.env.WP_SITE_URL.replace(/\/+$/, "");
 const httpsAgent = new https.Agent({
   keepAlive: true,
   rejectUnauthorized: true,
+  family: 4, // 🔥 FORCE IPV4
 });
 
 app.use(cors());
@@ -54,7 +62,8 @@ app.post("/paystack-webhook", (req, res) => {
   let event;
   try {
     event = JSON.parse(body.toString());
-  } catch {
+  } catch (err) {
+    log("❌ Invalid JSON body", err);
     return res.sendStatus(400);
   }
 
@@ -78,10 +87,14 @@ app.post("/paystack-webhook", (req, res) => {
 
     log("Calling WordPress:", url);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
     try {
       const wpRes = await fetch(url, {
         method: "POST",
         agent: httpsAgent,
+        signal: controller.signal,
         headers: {
           "Content-Type": "application/x-www-form-urlencoded",
           "User-Agent": "Calevid-Webhook/1.0 (+https://calevid.com)",
@@ -99,10 +112,19 @@ app.post("/paystack-webhook", (req, res) => {
 
       log("✅ WordPress responded", {
         status: wpRes.status,
+        statusText: wpRes.statusText,
+        headers: Object.fromEntries(wpRes.headers.entries()),
         body: text,
       });
     } catch (err) {
-      log("❌ WordPress request failed", err.message);
+      log("❌ WordPress request failed", {
+        name: err.name,
+        message: err.message,
+        cause: err.cause,
+        stack: err.stack,
+      });
+    } finally {
+      clearTimeout(timeout);
     }
   });
 });
@@ -114,7 +136,9 @@ app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
     if (!prompt)
-      return res.status(400).json({ status: "error", message: "Prompt required" });
+      return res
+        .status(400)
+        .json({ status: "error", message: "Prompt required" });
 
     const result = await fal.subscribe("fal-ai/ovi", {
       input: { prompt },
@@ -123,15 +147,20 @@ app.post("/generate-video", async (req, res) => {
 
     const videoUrl = result?.data?.video?.url;
     if (!videoUrl)
-      return res.status(500).json({ status: "error", message: "Video failed" });
+      return res
+        .status(500)
+        .json({ status: "error", message: "Video failed" });
 
     res.json({
       status: "success",
       videoUrl,
       requestId: result.requestId,
     });
-  } catch {
-    res.status(500).json({ status: "error", message: "Generation failed" });
+  } catch (err) {
+    log("❌ Video generation failed", err);
+    res
+      .status(500)
+      .json({ status: "error", message: "Generation failed" });
   }
 });
 
