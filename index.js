@@ -11,7 +11,11 @@ dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const WP_SITE_URL = (process.env.WP_SITE_URL || "").replace(/\/+$/, "");
+
+// ✅ FIX 1: trim() added (CRITICAL)
+const WP_SITE_URL = (process.env.WP_SITE_URL || "")
+  .trim()
+  .replace(/\/+$/, "");
 
 const httpsAgent = new https.Agent({
   keepAlive: true,
@@ -80,7 +84,15 @@ app.post("/paystack-webhook", (req, res) => {
 
   // Process asynchronously
   setImmediate(async () => {
-    const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
+    // ✅ FIX 2: REST endpoint must be GET
+    const params = new URLSearchParams({
+      secret: (process.env.CALEVID_WEBHOOK_SECRET || "").trim(),
+      email,
+      credits: String(credits),
+      reference,
+    });
+
+    const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits?${params.toString()}`;
     log("Calling WordPress REST endpoint:", url);
 
     const controller = new AbortController();
@@ -88,20 +100,13 @@ app.post("/paystack-webhook", (req, res) => {
 
     try {
       const wpRes = await fetch(url, {
-        method: "POST",
+        method: "GET",
         agent: httpsAgent,
         signal: controller.signal,
         headers: {
-          "Content-Type": "application/json",
           "User-Agent": "Calevid-Webhook/1.0 (+https://calevid.com)",
           "Accept": "application/json",
         },
-        body: JSON.stringify({
-          secret: (process.env.CALEVID_WEBHOOK_SECRET || "").trim(),
-          email,
-          credits,
-          reference,
-        }),
       });
 
       const text = await wpRes.text();
