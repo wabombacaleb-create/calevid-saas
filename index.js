@@ -16,10 +16,11 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 const WP_SITE_URL = process.env.WP_SITE_URL.replace(/\/+$/, "");
 
+// HTTPS agent with keep-alive and IPv4
 const httpsAgent = new https.Agent({
   keepAlive: true,
   rejectUnauthorized: true,
-  family: 4, // 🔥 FORCE IPV4
+  family: 4,
 });
 
 app.use(cors());
@@ -41,8 +42,8 @@ app.get("/status/test", (req, res) => {
 });
 
 // =================================================
-// PAYSTACK WEBHOOK
-// =================================================
+// PAYSTACK WEBHOOK (REST endpoint)
+ // =================================================
 app.post("/paystack-webhook", (req, res) => {
   log("🔥 PAYSTACK WEBHOOK HIT");
 
@@ -67,6 +68,7 @@ app.post("/paystack-webhook", (req, res) => {
     return res.sendStatus(400);
   }
 
+  // ✅ Immediate 200 to Paystack
   res.sendStatus(200);
 
   if (event.event !== "charge.success") return;
@@ -81,11 +83,11 @@ app.post("/paystack-webhook", (req, res) => {
 
   log("Processing credits", { email, credits, reference });
 
+  // Use REST endpoint for credit application
   setImmediate(async () => {
-    const url =
-      `${WP_SITE_URL}/wp-admin/admin-ajax.php?action=calevid_apply_credits`;
+    const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
 
-    log("Calling WordPress:", url);
+    log("Calling WordPress REST endpoint:", url);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -96,14 +98,14 @@ app.post("/paystack-webhook", (req, res) => {
         agent: httpsAgent,
         signal: controller.signal,
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Type": "application/json",
           "User-Agent": "Calevid-Webhook/1.0 (+https://calevid.com)",
-          "Accept": "application/json",
+          Accept: "application/json",
         },
-        body: new URLSearchParams({
+        body: JSON.stringify({
           secret: process.env.CALEVID_WEBHOOK_SECRET,
           email,
-          credits: String(credits),
+          credits,
           reference,
         }),
       });
