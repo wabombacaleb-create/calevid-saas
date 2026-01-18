@@ -6,7 +6,7 @@ import https from "https";
 import dns from "dns";
 import { fal } from "@fal-ai/client";
 
-// 🔧 FORCE IPV4 for Hostinger compatibility
+// Force IPv4 for Hostinger compatibility
 dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
@@ -16,7 +16,7 @@ const WP_SITE_URL = process.env.WP_SITE_URL.replace(/\/+$/, "");
 const httpsAgent = new https.Agent({
   keepAlive: true,
   rejectUnauthorized: true,
-  family: 4,
+  family: 4, // Force IPv4
 });
 
 app.use(cors());
@@ -42,7 +42,7 @@ app.post("/paystack-webhook", (req, res) => {
   const signature = req.headers["x-paystack-signature"];
 
   const hash = crypto
-    .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY)
+    .createHmac("sha512", (process.env.PAYSTACK_SECRET_KEY || '').trim())
     .update(body)
     .digest("hex");
 
@@ -72,10 +72,10 @@ app.post("/paystack-webhook", (req, res) => {
 
   setImmediate(async () => {
     const url = `${WP_SITE_URL}/wp-admin/admin-ajax.php?action=calevid_apply_credits`;
-    log("Calling WordPress REST endpoint:", url);
+    log("Calling WordPress admin-ajax.php:", url);
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60000); // ✅ 60s timeout
+    const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout
 
     try {
       const wpRes = await fetch(url, {
