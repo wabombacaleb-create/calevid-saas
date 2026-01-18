@@ -2,19 +2,24 @@ import express from "express";
 import cors from "cors";
 import crypto from "crypto";
 import fetch from "node-fetch";
+import https from "https";
 import dns from "dns";
 import { fal } from "@fal-ai/client";
 
-// 🔧 FORCE IPV4 (Hostinger-safe)
 dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ✅ CLEAN WORDPRESS URL
 const WP_SITE_URL = (process.env.WP_SITE_URL || "")
   .trim()
   .replace(/\/+$/, "");
+
+const httpsAgent = new https.Agent({
+  keepAlive: false,          // IMPORTANT: avoid hanging sockets
+  rejectUnauthorized: true,
+  family: 4,
+});
 
 app.use(cors());
 app.use("/paystack-webhook", express.raw({ type: "application/json" }));
@@ -28,12 +33,7 @@ const log = (...args) =>
 // ======================
 // HEALTH
 // ======================
-app.get("/", (_, res) => res.send("Calevid backend is running"));
-
-app.get("/status/test", (_, res) => {
-  log("Health check hit");
-  res.json({ status: "ok" });
-});
+app.get("/", (req, res) => res.send("Calevid backend is running"));
 
 // ======================
 // PAYSTACK WEBHOOK
@@ -57,13 +57,11 @@ app.post("/paystack-webhook", (req, res) => {
   let event;
   try {
     event = JSON.parse(body.toString());
-  } catch (err) {
-    log("❌ Invalid JSON body", err);
+  } catch {
     return res.sendStatus(400);
   }
 
-  // ✅ IMMEDIATE ACK TO PAYSTACK
-  res.sendStatus(200);
+  res.sendStatus(200); // respond immediately
 
   if (event.event !== "charge.success") return;
 
@@ -75,44 +73,39 @@ app.post("/paystack-webhook", (req, res) => {
 
   log("Processing credits", { email, credits, reference });
 
-  // ======================
-  // ASYNC CREDIT APPLY
-  // ======================
-  setTimeout(async () => {
+  setImmediate(async () => {
+    const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
+    log("Calling WordPress REST endpoint:", url);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
     try {
-      const params = new URLSearchParams({
-        secret: (process.env.CALEVID_WEBHOOK_SECRET || "").trim(),
-        email,
-        credits: String(credits),
-        reference,
-      });
-
-      const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits?${params.toString()}`;
-
-      log("Calling WordPress REST endpoint:", url);
-
       const wpRes = await fetch(url, {
-        method: "GET",
+        method: "POST",
+        agent: httpsAgent,
+        signal: controller.signal,
         headers: {
+          "Content-Type": "application/json",
           "User-Agent": "Calevid-Webhook/1.0",
           "Accept": "application/json",
         },
-        timeout: 15000, // ✅ node-fetch SAFE timeout
+        body: JSON.stringify({
+          secret: process.env.CALEVID_WEBHOOK_SECRET,
+          email,
+          credits,
+          reference,
+        }),
       });
 
       const text = await wpRes.text();
-
-      log("✅ WordPress responded", {
-        status: wpRes.status,
-        body: text,
-      });
+      log("✅ WordPress responded", wpRes.status, text);
     } catch (err) {
-      log("❌ WordPress request failed", {
-        name: err.name,
-        message: err.message,
-      });
+      log("❌ WordPress request failed", err.name, err.message);
+    } finally {
+      clearTimeout(timeout);
     }
-  }, 0);
+  });
 });
 
 // ======================
@@ -121,45 +114,22 @@ app.post("/paystack-webhook", (req, res) => {
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
-
-    if (!prompt) {
-      return res.status(400).json({
-        status: "error",
-        message: "Prompt required",
-      });
-    }
+    if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
     const result = await fal.subscribe("fal-ai/ovi", {
       input: { prompt },
       logs: true,
     });
 
-    const videoUrl = result?.data?.video?.url;
-
-    if (!videoUrl) {
-      return res.status(500).json({
-        status: "error",
-        message: "Video failed",
-      });
-    }
-
     res.json({
       status: "success",
-      videoUrl,
-      requestId: result.requestId,
+      videoUrl: result?.data?.video?.url,
     });
   } catch (err) {
-    log("❌ Video generation failed", err);
-    res.status(500).json({
-      status: "error",
-      message: "Generation failed",
-    });
+    res.status(500).json({ error: "Generation failed" });
   }
 });
 
-// ======================
-// START SERVER
-// ======================
 app.listen(PORT, () =>
   log(`🚀 Calevid backend running on port ${PORT}`)
 );
