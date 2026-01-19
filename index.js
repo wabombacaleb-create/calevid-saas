@@ -4,6 +4,7 @@ import crypto from "crypto";
 import fetch from "node-fetch";
 import https from "https";
 import dns from "dns";
+import AbortController from "abort-controller";
 import { fal } from "@fal-ai/client";
 
 dns.setDefaultResultOrder("ipv4first");
@@ -16,7 +17,7 @@ const WP_SITE_URL = (process.env.WP_SITE_URL || "")
   .replace(/\/+$/, "");
 
 const httpsAgent = new https.Agent({
-  keepAlive: false,          // IMPORTANT: avoid hanging sockets
+  keepAlive: false,
   rejectUnauthorized: true,
   family: 4,
 });
@@ -61,15 +62,15 @@ app.post("/paystack-webhook", (req, res) => {
     return res.sendStatus(400);
   }
 
-  res.sendStatus(200); // respond immediately
+  res.sendStatus(200); // IMPORTANT: respond immediately
 
   if (event.event !== "charge.success") return;
 
   const { reference, customer, amount } = event.data;
   const email = (customer?.email || "").trim();
-  const credits = Math.floor(amount / 100 / 150);
+  const credits = Math.max(1, Math.floor(amount / 100 / 150));
 
-  if (!email || credits <= 0) return;
+  if (!email) return;
 
   log("Processing credits", { email, credits, reference });
 
@@ -86,9 +87,9 @@ app.post("/paystack-webhook", (req, res) => {
         agent: httpsAgent,
         signal: controller.signal,
         headers: {
-          "Content-Type": "application/json",
-          "User-Agent": "Calevid-Webhook/1.0",
+          "Content-Type": "application/json; charset=utf-8",
           "Accept": "application/json",
+          "User-Agent": "Calevid-Webhook/1.0",
         },
         body: JSON.stringify({
           secret: process.env.CALEVID_WEBHOOK_SECRET,
@@ -99,9 +100,14 @@ app.post("/paystack-webhook", (req, res) => {
       });
 
       const text = await wpRes.text();
-      log("✅ WordPress responded", wpRes.status, text);
+
+      if (!wpRes.ok) {
+        throw new Error(`WP error ${wpRes.status}: ${text}`);
+      }
+
+      log("✅ WordPress success:", text);
     } catch (err) {
-      log("❌ WordPress request failed", err.name, err.message);
+      log("❌ WordPress request failed:", err.name, err.message);
     } finally {
       clearTimeout(timeout);
     }
