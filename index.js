@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
-import fetch from "node-fetch";
 import https from "https";
 import dns from "dns";
 import { fal } from "@fal-ai/client";
@@ -11,70 +10,47 @@ dns.setDefaultResultOrder("ipv4first");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-/* ======================
-   ENV VALIDATION
-====================== */
-if (!process.env.WP_SITE_URL) {
-  throw new Error("WP_SITE_URL is not set");
-}
-if (!process.env.CALEVID_WEBHOOK_SECRET) {
-  throw new Error("CALEVID_WEBHOOK_SECRET is not set");
-}
-if (!process.env.PAYSTACK_SECRET_KEY) {
-  throw new Error("PAYSTACK_SECRET_KEY is not set");
-}
-if (!process.env.FAL_KEY) {
-  throw new Error("FAL_KEY is not set");
-}
+const WP_SITE_URL = (process.env.WP_SITE_URL || "")
+  .trim()
+  .replace(/\/+$/, "");
 
-const WP_SITE_URL = process.env.WP_SITE_URL.trim().replace(/\/+$/, "");
-
-/* ======================
-   HTTPS AGENT
-====================== */
 const httpsAgent = new https.Agent({
   keepAlive: false,
   rejectUnauthorized: true,
   family: 4,
 });
 
-/* ======================
-   MIDDLEWARE
-====================== */
 app.use(cors());
 app.use("/paystack-webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
 
-/* ======================
-   FAL CONFIG
-====================== */
 fal.config({ credentials: process.env.FAL_KEY });
 
 const log = (...args) =>
   console.log(`[${new Date().toISOString()}]`, ...args);
 
-/* ======================
-   HEALTH CHECK
-====================== */
+// ======================
+// HEALTH CHECK
+// ======================
 app.get("/", (req, res) => {
-  res.json({ status: "ok", service: "calevid-backend" });
+  res.json({ status: "ok", time: new Date().toISOString() });
 });
 
-/* ======================
-   PAYSTACK WEBHOOK
-====================== */
+// ======================
+// PAYSTACK WEBHOOK
+// ======================
 app.post("/paystack-webhook", (req, res) => {
   log("🔥 PAYSTACK WEBHOOK HIT");
 
   const rawBody = req.body;
   const signature = req.headers["x-paystack-signature"];
 
-  const computedHash = crypto
-    .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY)
+  const hash = crypto
+    .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY || "")
     .update(rawBody)
     .digest("hex");
 
-  if (computedHash !== signature) {
+  if (hash !== signature) {
     log("❌ Invalid Paystack signature");
     return res.sendStatus(401);
   }
@@ -86,8 +62,7 @@ app.post("/paystack-webhook", (req, res) => {
     return res.sendStatus(400);
   }
 
-  // Respond immediately (Paystack requirement)
-  res.sendStatus(200);
+  res.sendStatus(200); // respond immediately to Paystack
 
   if (event.event !== "charge.success") return;
 
@@ -100,14 +75,13 @@ app.post("/paystack-webhook", (req, res) => {
   log("Processing credits", { email, credits, reference });
 
   setImmediate(async () => {
-    const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
-    log("Calling WordPress:", wpUrl);
+    const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
     try {
-      const response = await fetch(wpUrl, {
+      const response = await fetch(url, {
         method: "POST",
         agent: httpsAgent,
         signal: controller.signal,
@@ -134,9 +108,9 @@ app.post("/paystack-webhook", (req, res) => {
   });
 });
 
-/* ======================
-   VIDEO GENERATION
-====================== */
+// ======================
+// VIDEO GENERATION
+// ======================
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt } = req.body;
@@ -154,14 +128,11 @@ app.post("/generate-video", async (req, res) => {
       videoUrl: result?.data?.video?.url || null,
     });
   } catch (err) {
-    log("❌ Video generation failed", err.message);
+    log("❌ Video generation failed", err);
     res.status(500).json({ error: "Generation failed" });
   }
 });
 
-/* ======================
-   START SERVER
-====================== */
 app.listen(PORT, () => {
   log(`🚀 Calevid backend running on port ${PORT}`);
 });
