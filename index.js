@@ -10,123 +10,129 @@ dns.setDefaultResultOrder("ipv4first");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+
+// ======================
+// CONFIG
+// ======================
 const WP_SITE_URL = (process.env.WP_SITE_URL || "").trim().replace(/\/+$/, "");
-
-const httpsAgent = new https.Agent({
- keepAlive: false,
- rejectUnauthorized: true,
- family: 4,
-});
-
+const httpsAgent = new https.Agent({ keepAlive: false, rejectUnauthorized: true, family: 4 });
 fal.config({ credentials: process.env.FAL_KEY });
-const log = (...args) => console.log(`[${new Date().toISOString()}]`, ...args);
 
 // ======================
 // MIDDLEWARE
 // ======================
+app.use(cors());
 
-// CORS (adjust origin as needed)
-app.use(
- cors({
- origin: "*",
- methods: ["GET", "POST", "OPTIONS"],
- allowedHeaders: ["Content-Type", "x-paystack-signature"],
- })
-);
+// Only parse raw body for Paystack webhook to validate signature
+app.use("/paystack-webhook", express.raw({ type: "application/json" }));
 
-// For all non-webhook JSON routes, if you add any later
+// Normal JSON parsing for other routes
 app.use(express.json());
 
-// ======================
-// HEALTH CHECK
-// ======================
-app.get("/", (req, res) =>
- res.send({ status: "ok", time: new Date().toISOString() })
-);
+const log = (...args) => console.log(`[${new Date().toISOString()}]`, ...args);
 
 // ======================
-// PAYSTACK WEBHOOK (raw body for signature)
+// HEALTH
 // ======================
-app.post(
- "/paystack-webhook",
- // Use raw body so HMAC gets the exact bytes Paystack sent
- express.raw({ type: "application/json" }),
- async (req, res) => {
- log("🔥 PAYSTACK WEBHOOK HIT");
+app.get("/", (req, res) => res.json({ status: "ok", time: new Date().toISOString() }));
 
- const secret = process.env.PAYSTACK_SECRET;
- const signature = req.headers["x-paystack-signature"];
+// ======================
+// PAYSTACK WEBHOOK
+// ======================
+app.post("/paystack-webhook", (req, res) => {
+  log("🔥 PAYSTACK WEBHOOK HIT");
 
- if (!secret) {
- log("❌ PAYSTACK_SECRET is not set in environment");
- return res.status(500).send("Server misconfigured");
- }
+  const rawBody = req.body; // This is a Buffer because of express.raw()
+  const signature = req.headers["x-paystack-signature"];
 
- if (!signature) {
- log("❌ Missing x-paystack-signature header");
- return res.status(400).send("Missing signature");
- }
+  // Verify HMAC signature
+  const hash = crypto
+    .createHmac("sha512", process.env.PAYSTACK_SECRET_KEY || "")
+    .update(rawBody)
+    .digest("hex");
 
- // req.body is a Buffer here – valid for Hmac.update
- let computed;
- try {
- computed = crypto
- .createHmac("sha512", secret)
- .update(req.body) // Buffer, NOT an object
- .digest("hex");
- } catch (err) {
- log("❌ Error computing HMAC:", err.message);
- return res.status(500).send("Error verifying signature");
- }
+  if (hash !== signature) {
+    log("❌ Invalid Paystack signature");
+    return res.sendStatus(401);
+  }
 
- if (computed !== signature) {
- log("❌ Invalid Paystack signature");
- return res.status(400).send("Invalid signature");
- }
+  let event;
+  try {
+    event = JSON.parse(rawBody.toString());
+  } catch (err) {
+    log("❌ Failed to parse Paystack payload", err.message);
+    return res.sendStatus(400);
+  }
 
- // Signature valid – parse JSON
- let event;
- try {
- const bodyString = req.body.toString("utf8");
- event = JSON.parse(bodyString);
- } catch (err) {
- log("❌ Failed to parse webhook JSON:", err.message);
- return res.status(400).send("Invalid JSON");
- }
+  res.sendStatus(200); // respond immediately to Paystack
 
- log(
- "✅ Verified Paystack event:",
- event.event,
- "reference:",
- event?.data?.reference
- );
+  if (event.event !== "charge.success") return;
 
- // TODO: your business logic here
- // Example placeholder:
- // if (event.event === "charge.success") {
- // // e.g., notify your WordPress backend:
- // if (WP_SITE_URL) {
- // try {
- // const wpRes = await fetch(`${WP_SITE_URL}/wp-json/calevid/v1/paystack`, {
- // method: "POST",
- // headers: { "Content-Type": "application/json" },
- // body: JSON.stringify(event),
- // agent: httpsAgent,
- // });
- // log("WP notify status:", wpRes.status);
- // } catch (e) {
- // log("Error notifying WP:", e.message);
- // }
- // }
- // }
+  const { reference, customer, amount } = event.data;
+  const email = (customer?.email || "").trim();
+  const credits = Math.floor(amount / 100 / 150); // 150 KSh per credit
 
- return res.sendStatus(200);
- }
-);
+  if (!email || credits <= 0) return;
+
+  log("Processing credits", { email, credits, reference });
+
+  // Apply credits to WordPress asynchronously
+  setImmediate(async () => {
+    const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
+    log("Calling WordPress REST endpoint:", url);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const wpRes = await fetch(url, {
+        method: "POST",
+        agent: httpsAgent,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "User-Agent": "Calevid-Webhook/1.0",
+        },
+        body: JSON.stringify({
+          secret: process.env.CALEVID_WEBHOOK_SECRET,
+          email,
+          credits,
+          reference,
+        }),
+      });
+
+      const text = await wpRes.text();
+      log("✅ WordPress responded", wpRes.status, text);
+    } catch (err) {
+      log("❌ WordPress request failed", err.name, err.message);
+    } finally {
+      clearTimeout(timeout);
+    }
+  });
+});
+
+// ======================
+// VIDEO GENERATION
+// ======================
+app.post("/generate-video", async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (!prompt) return res.status(400).json({ error: "Prompt required" });
+
+    const result = await fal.subscribe("fal-ai/ovi", { input: { prompt }, logs: true });
+
+    res.json({
+      status: "success",
+      videoUrl: result?.data?.video?.url,
+    });
+  } catch (err) {
+    log("❌ Video generation failed", err.message);
+    res.status(500).json({ error: "Generation failed" });
+  }
+});
 
 // ======================
 // START SERVER
 // ======================
-app.listen(PORT, () => {
- log(`🚀 Calevid backend running on port ${PORT}`);
-});
+app.listen(PORT, () => log(`🚀 Calevid backend running on port ${PORT}`));
