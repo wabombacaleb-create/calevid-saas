@@ -106,16 +106,14 @@ app.post(
 
     console.log("Processing credits", { email, credits, reference });
 
-    const WP_SITE_URL = process.env.WP_SITE_URL;
-    const CALEVID_WEBHOOK_SECRET = process.env.CALEVID_WEBHOOK_SECRET;
-
-    if (!WP_SITE_URL || !CALEVID_WEBHOOK_SECRET) {
+    if (!WP_SITE_URL || !WEBHOOK_SECRET) {
       console.log("❌ Missing WP_SITE_URL or CALEVID_WEBHOOK_SECRET env vars");
       return;
     }
 
-    const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
-    console.log("Calling WordPress REST endpoint:", url);
+    // FIXED: Construct WordPress REST URL correctly
+    const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
+    console.log("Calling WordPress REST endpoint:", wpUrl);
 
     const httpsAgent = new https.Agent({ keepAlive: true });
 
@@ -124,8 +122,8 @@ app.post(
       const timeout = setTimeout(() => controller.abort(), 15000);
 
       try {
-        const wpRes = await fetch(url, {
-          method: "POST",
+        const wpRes = await fetch(wpUrl, {
+          method: "POST", // must be POST
           agent: httpsAgent,
           signal: controller.signal,
           headers: {
@@ -134,7 +132,7 @@ app.post(
             Accept: "application/json",
           },
           body: JSON.stringify({
-            secret: CALEVID_WEBHOOK_SECRET,
+            secret: WEBHOOK_SECRET,
             email,
             credits,
             reference,
