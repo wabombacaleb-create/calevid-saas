@@ -28,8 +28,7 @@ fal.config({
 /* =========================
    GLOBAL MIDDLEWARE
 ========================= */
-app.use(cors());
-app.use(express.json()); // SAFE for all routes except webhook
+app.use(cors()); // KEEP CORS ONLY here
 
 const httpsAgent = new https.Agent({
   keepAlive: false,
@@ -49,29 +48,46 @@ app.get("/", (req, res) => {
 
 /* =========================
    PAYSTACK WEBHOOK (RAW BODY)
+   ⚠ MUST COME BEFORE express.json()
 ========================= */
 app.post(
-  "/paystack-webhook",
-  express.raw({ type: "application/json" }),
-  (req, res) => {
-    log("🔥 PAYSTACK WEBHOOK HIT");
+ "/paystack-webhook",
+ express.raw({ type: "application/json" }),
+ (req, res) => {
+ log("🔥 PAYSTACK WEBHOOK HIT");
 
-    const signature = req.headers["x-paystack-signature"];
+ const signature = req.headers["x-paystack-signature"];
 
-    if (!signature || !PAYSTACK_SECRET) {
-      log("❌ Missing Paystack signature or secret");
-      return res.sendStatus(401);
-    }
+ if (!signature || !PAYSTACK_SECRET) {
+ log("❌ Missing Paystack signature or secret");
+ return res.sendStatus(401);
+ }
 
-    const hash = crypto
-      .createHmac("sha512", PAYSTACK_SECRET)
-      .update(req.body) // RAW BUFFER (CRITICAL)
-      .digest("hex");
+ // ✅ Always pass a string/Buffer to HMAC
+ const rawBody = Buffer.isBuffer(req.body)
+ ? req.body
+ : Buffer.from(JSON.stringify(req.body));
 
-    if (hash !== signature) {
-      log("❌ Invalid Paystack signature");
-      return res.sendStatus(401);
-    }
+ const hash = crypto
+ .createHmac("sha512", PAYSTACK_SECRET)
+ .update(rawBody)
+ .digest("hex");
+
+ if (hash !== signature) {
+ log("❌ Invalid Paystack signature");
+ return res.sendStatus(401);
+ }
+
+ log("✅ Paystack signature verified");
+
+ let event;
+ try {
+ event = Buffer.isBuffer(req.body)
+ ? JSON.parse(req.body.toString())
+ : req.body;
+ } catch {
+ return res.sendStatus(400);
+ }
 
     log("✅ Paystack signature verified");
 
@@ -112,7 +128,7 @@ app.post(
             signal: controller.signal,
             headers: {
               "Content-Type": "application/json",
-              "Accept": "application/json",
+              Accept: "application/json",
               "User-Agent": "Calevid-Webhook/1.0",
             },
             body: JSON.stringify({
@@ -134,6 +150,11 @@ app.post(
     });
   }
 );
+
+/* =========================
+   JSON PARSER (AFTER WEBHOOK)
+========================= */
+app.use(express.json()); // ✅ SAFE NOW
 
 /* =========================
    VIDEO GENERATION (fal.ai)
