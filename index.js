@@ -115,6 +115,9 @@ app.post(
     const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
     console.log("Calling WordPress REST endpoint:", wpUrl);
 
+    // DEBUG: Show exactly what secret is being sent
+    console.log("WEBHOOK_SECRET being sent to WordPress:", `"${WEBHOOK_SECRET}"`);
+
     const httpsAgent = new https.Agent({ keepAlive: true });
 
     setImmediate(async () => {
