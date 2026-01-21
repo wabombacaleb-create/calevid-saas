@@ -1,3 +1,4 @@
+
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -28,7 +29,7 @@ fal.config({
 /* =========================
    GLOBAL MIDDLEWARE
 ========================= */
-app.use(cors()); // KEEP CORS ONLY here
+app.use(cors());
 
 const httpsAgent = new https.Agent({
   keepAlive: false,
@@ -48,7 +49,6 @@ app.get("/", (req, res) => {
 
 /* =========================
    PAYSTACK WEBHOOK (RAW BODY)
-   ⚠ MUST COME BEFORE express.json()
 ========================= */
 app.post(
  "/paystack-webhook",
@@ -89,72 +89,14 @@ app.post(
  return res.sendStatus(400);
  }
 
-    log("✅ Paystack signature verified");
-
-    let event;
-    try {
-      event = JSON.parse(req.body.toString());
-    } catch {
-      return res.sendStatus(400);
-    }
-
-    // Respond immediately to Paystack
-    res.sendStatus(200);
-
-    if (event.event !== "charge.success") return;
-
-    const { reference, customer, amount } = event.data;
-
-    const email = (customer?.email || "").trim();
-    const credits = Math.floor(amount / 100 / 150);
-
-    if (!email || credits <= 0) {
-      log("❌ Invalid credit payload");
-      return;
-    }
-
-    log("💳 Applying credits", { email, credits, reference });
-
-    setImmediate(async () => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-
-      try {
-        const wpRes = await fetch(
-          `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`,
-          {
-            method: "POST",
-            agent: httpsAgent,
-            signal: controller.signal,
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-              "User-Agent": "Calevid-Webhook/1.0",
-            },
-            body: JSON.stringify({
-              secret: WEBHOOK_SECRET,
-              email,
-              credits,
-              reference,
-            }),
-          }
-        );
-
-        const text = await wpRes.text();
-        log("✅ WordPress response", wpRes.status, text);
-      } catch (err) {
-        log("❌ WordPress request failed", err.name, err.message);
-      } finally {
-        clearTimeout(timeout);
-      }
-    });
-  }
+ // ...rest of your logic using `event`
+ }
 );
 
 /* =========================
    JSON PARSER (AFTER WEBHOOK)
 ========================= */
-app.use(express.json()); // ✅ SAFE NOW
+app.use(express.json());
 
 /* =========================
    VIDEO GENERATION (fal.ai)
