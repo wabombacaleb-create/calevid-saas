@@ -1,4 +1,3 @@
-
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -48,49 +47,113 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   PAYSTACK WEBHOOK (RAW BODY)
+   PAYSTACK WEBHOOK (REPLACED WITH HOSTINGER VERSION)
 ========================= */
 app.post(
- "/paystack-webhook",
- express.raw({ type: "application/json" }),
- (req, res) => {
- log("🔥 PAYSTACK WEBHOOK HIT");
+  "/paystack-webhook",
+  express.raw({ type: "application/json" }),
+  (req, res) => {
+    console.log("🔥 PAYSTACK WEBHOOK HIT");
 
- const signature = req.headers["x-paystack-signature"];
+    const body = req.body; // Buffer from express.raw
+    const signature = req.headers["x-paystack-signature"];
+    const secretKey = process.env.PAYSTACK_SECRET_KEY || "";
 
- if (!signature || !PAYSTACK_SECRET) {
- log("❌ Missing Paystack signature or secret");
- return res.sendStatus(401);
- }
+    if (!signature || !secretKey) {
+      console.log("❌ Missing Paystack signature or secret");
+      return res.sendStatus(401);
+    }
 
- // ✅ Always pass a string/Buffer to HMAC
- const rawBody = Buffer.isBuffer(req.body)
- ? req.body
- : Buffer.from(JSON.stringify(req.body));
+    const hash = crypto
+      .createHmac("sha512", secretKey)
+      .update(body)
+      .digest("hex");
 
- const hash = crypto
- .createHmac("sha512", PAYSTACK_SECRET)
- .update(rawBody)
- .digest("hex");
+    if (hash !== signature) {
+      console.log("❌ Invalid Paystack signature");
+      return res.sendStatus(401);
+    }
 
- if (hash !== signature) {
- log("❌ Invalid Paystack signature");
- return res.sendStatus(401);
- }
+    let event;
+    try {
+      event = JSON.parse(body.toString("utf8"));
+    } catch (e) {
+      console.log("❌ Failed to parse webhook body", e.message);
+      return res.sendStatus(400);
+    }
 
- log("✅ Paystack signature verified");
+    console.log(
+      "🔔 Paystack event:",
+      event?.event,
+      "status:",
+      event?.data?.status
+    );
 
- let event;
- try {
- event = Buffer.isBuffer(req.body)
- ? JSON.parse(req.body.toString())
- : req.body;
- } catch {
- return res.sendStatus(400);
- }
+    res.sendStatus(200); // acknowledge Paystack quickly
 
- // ...rest of your logic using `event`
- }
+    if (event.event !== "charge.success" || event.data?.status !== "success") {
+      return;
+    }
+
+    const { reference, customer, amount } = event.data || {};
+    const email = (customer?.email || "").trim();
+    const credits = Math.floor((amount || 0) / 100 / 150);
+
+    if (!email || !reference || !credits || credits <= 0) {
+      console.log("⚠️ Missing or invalid data", { email, reference, credits });
+      return;
+    }
+
+    console.log("Processing credits", { email, credits, reference });
+
+    const WP_SITE_URL = process.env.WP_SITE_URL;
+    const CALEVID_WEBHOOK_SECRET = process.env.CALEVID_WEBHOOK_SECRET;
+
+    if (!WP_SITE_URL || !CALEVID_WEBHOOK_SECRET) {
+      console.log("❌ Missing WP_SITE_URL or CALEVID_WEBHOOK_SECRET env vars");
+      return;
+    }
+
+    const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
+    console.log("Calling WordPress REST endpoint:", url);
+
+    const httpsAgent = new https.Agent({ keepAlive: true });
+
+    setImmediate(async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
+      try {
+        const wpRes = await fetch(url, {
+          method: "POST",
+          agent: httpsAgent,
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": "Calevid-Webhook/1.0",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            secret: CALEVID_WEBHOOK_SECRET,
+            email,
+            credits,
+            reference,
+          }),
+        });
+
+        const text = await wpRes.text();
+        console.log("✅ WordPress responded", wpRes.status, text);
+      } catch (err) {
+        console.log(
+          "❌ WordPress request failed",
+          err.name,
+          err.message || err.toString()
+        );
+      } finally {
+        clearTimeout(timeout);
+      }
+    });
+  }
 );
 
 /* =========================
