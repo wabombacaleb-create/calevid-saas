@@ -111,12 +111,14 @@ app.post(
       return;
     }
 
-    // FIXED: Construct WordPress REST URL correctly
+    // Construct WordPress REST URL correctly
     const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
-    console.log("Calling WordPress REST endpoint:", wpUrl);
 
-    // DEBUG: Show exactly what secret is being sent
-    console.log("WEBHOOK_SECRET being sent to WordPress:", `"${WEBHOOK_SECRET}"`);
+    // ===== DEBUG LOGS =====
+    console.log("WP_SITE_URL:", `"${WP_SITE_URL}"`);
+    console.log("Final WordPress URL:", `"${wpUrl}"`);
+    console.log("Webhook secret being sent:", `"${WEBHOOK_SECRET}"`);
+    // ======================
 
     const httpsAgent = new https.Agent({ keepAlive: true });
 
@@ -126,7 +128,7 @@ app.post(
 
       try {
         const wpRes = await fetch(wpUrl, {
-          method: "POST", // must be POST
+          method: "POST",
           agent: httpsAgent,
           signal: controller.signal,
           headers: {
