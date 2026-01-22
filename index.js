@@ -2,7 +2,6 @@ import express from "express";
 import cors from "cors";
 import crypto from "crypto";
 import fetch from "node-fetch";
-import https from "https";
 import dns from "dns";
 import { fal } from "@fal-ai/client";
 
@@ -30,12 +29,6 @@ fal.config({
 ========================= */
 app.use(cors());
 
-const httpsAgent = new https.Agent({
-  keepAlive: false,
-  rejectUnauthorized: true,
-  family: 4,
-});
-
 const log = (...args) =>
   console.log(`[${new Date().toISOString()}]`, ...args);
 
@@ -47,7 +40,7 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   PAYSTACK WEBHOOK (REPLACED WITH HOSTINGER VERSION)
+   PAYSTACK WEBHOOK
 ========================= */
 app.post(
   "/paystack-webhook",
@@ -55,17 +48,16 @@ app.post(
   (req, res) => {
     console.log("🔥 PAYSTACK WEBHOOK HIT");
 
-    const body = req.body; // Buffer from express.raw
+    const body = req.body;
     const signature = req.headers["x-paystack-signature"];
-    const secretKey = process.env.PAYSTACK_SECRET_KEY || "";
 
-    if (!signature || !secretKey) {
+    if (!signature || !PAYSTACK_SECRET) {
       console.log("❌ Missing Paystack signature or secret");
       return res.sendStatus(401);
     }
 
     const hash = crypto
-      .createHmac("sha512", secretKey)
+      .createHmac("sha512", PAYSTACK_SECRET)
       .update(body)
       .digest("hex");
 
@@ -89,7 +81,8 @@ app.post(
       event?.data?.status
     );
 
-    res.sendStatus(200); // acknowledge Paystack quickly
+    // ACK PAYSTACK IMMEDIATELY
+    res.sendStatus(200);
 
     if (event.event !== "charge.success" || event.data?.status !== "success") {
       return;
@@ -100,27 +93,22 @@ app.post(
     const credits = Math.floor((amount || 0) / 100 / 150);
 
     if (!email || !reference || !credits || credits <= 0) {
-      console.log("⚠️ Missing or invalid data", { email, reference, credits });
+      console.log("⚠️ Invalid credit data", { email, reference, credits });
       return;
     }
 
     console.log("Processing credits", { email, credits, reference });
 
     if (!WP_SITE_URL || !WEBHOOK_SECRET) {
-      console.log("❌ Missing WP_SITE_URL or CALEVID_WEBHOOK_SECRET env vars");
+      console.log("❌ Missing WP_SITE_URL or CALEVID_WEBHOOK_SECRET");
       return;
     }
 
-    // Construct WordPress REST URL correctly
     const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
 
-    // ===== DEBUG LOGS =====
     console.log("WP_SITE_URL:", `"${WP_SITE_URL}"`);
     console.log("Final WordPress URL:", `"${wpUrl}"`);
     console.log("Webhook secret being sent:", `"${WEBHOOK_SECRET}"`);
-    // ======================
-
-    const httpsAgent = new https.Agent({ keepAlive: true });
 
     setImmediate(async () => {
       const controller = new AbortController();
@@ -129,7 +117,6 @@ app.post(
       try {
         const wpRes = await fetch(wpUrl, {
           method: "POST",
-          agent: httpsAgent,
           signal: controller.signal,
           headers: {
             "Content-Type": "application/json",
