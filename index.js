@@ -13,10 +13,6 @@ const PORT = process.env.PORT || 10000;
 /* =========================
    CONFIG
 ========================= */
-const WP_SITE_URL = (process.env.WP_SITE_URL || "")
-  .trim()
-  .replace(/\/+$/, "");
-
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
 const WEBHOOK_SECRET = process.env.CALEVID_WEBHOOK_SECRET;
 
@@ -99,16 +95,16 @@ app.post(
 
     console.log("Processing credits", { email, credits, reference });
 
-    if (!WP_SITE_URL || !WEBHOOK_SECRET) {
-      console.log("❌ Missing WP_SITE_URL or CALEVID_WEBHOOK_SECRET");
+    if (!WEBHOOK_SECRET) {
+      console.log("❌ Missing CALEVID_WEBHOOK_SECRET");
       return;
     }
 
-    const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
+    // 🔥 IMPORTANT: HTTP, not HTTPS (Hostinger requirement)
+    const wpUrl = "http://calevid.com/wp-json/calevid/v1/apply-credits";
 
-    console.log("WP_SITE_URL:", `"${WP_SITE_URL}"`);
-    console.log("Final WordPress URL:", `"${wpUrl}"`);
-    console.log("Webhook secret being sent:", `"${WEBHOOK_SECRET}"`);
+    console.log("Calling WordPress:", wpUrl);
+    console.log("Webhook secret:", `"${WEBHOOK_SECRET}"`);
 
     setImmediate(async () => {
       const controller = new AbortController();
@@ -134,11 +130,7 @@ app.post(
         const text = await wpRes.text();
         console.log("✅ WordPress responded", wpRes.status, text);
       } catch (err) {
-        console.log(
-          "❌ WordPress request failed",
-          err.name,
-          err.message || err.toString()
-        );
+        console.log("❌ WordPress request failed", err);
       } finally {
         clearTimeout(timeout);
       }
@@ -147,12 +139,12 @@ app.post(
 );
 
 /* =========================
-   JSON PARSER (AFTER WEBHOOK)
+   JSON PARSER
 ========================= */
 app.use(express.json());
 
 /* =========================
-   VIDEO GENERATION (fal.ai)
+   VIDEO GENERATION
 ========================= */
 app.post("/generate-video", async (req, res) => {
   try {
