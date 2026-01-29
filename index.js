@@ -47,7 +47,7 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   PAYSTACK WEBHOOK
+   PAYSTACK WEBHOOK — PRODUCTION READY
 ========================= */
 app.post(
   "/paystack-webhook",
@@ -84,18 +84,17 @@ app.post(
 
     log("🔔 Paystack event:", event?.event, event?.data?.status);
 
-    res.sendStatus(200); // acknowledge Paystack immediately
+    // Immediately acknowledge Paystack
+    res.sendStatus(200);
 
-    if (event.event !== "charge.success" || event.data?.status !== "success") {
-      return;
-    }
+    if (event.event !== "charge.success" || event.data?.status !== "success") return;
 
     const { reference, customer, amount } = event.data || {};
-    const email = (customer?.email || "").trim();
-    const credits = Math.floor((amount || 0) / 100 / 150);
+    const email = (customer?.email || "").trim().toLowerCase();
+    const credits = Math.floor((amount || 0) / 100 / 150); // adjust 150 if credit price changes
 
     if (!email || !reference || credits <= 0) {
-      log("⚠️ Invalid data", { email, reference, credits });
+      log("⚠️ Invalid data for credit application", { email, reference, credits });
       return;
     }
 
@@ -105,33 +104,42 @@ app.post(
     }
 
     const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
-    log("➡️ Calling WordPress:", url);
+    log("➡️ Calling WordPress:", url, { email, reference, credits });
 
     setImmediate(async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);
 
       try {
-        // ✅ Use the original httpsAgent here — this is the fix
+        const bodyParams = new URLSearchParams({
+          secret: String(WEBHOOK_SECRET).trim(),
+          email,
+          credits: String(credits),
+          reference: String(reference).trim(),
+        });
+
         const wpRes = await fetch(url, {
           method: "POST",
           agent: httpsAgent,
           signal: controller.signal,
           headers: {
-            "Content-Type": "application/json",
+            "Content-Type": "application/x-www-form-urlencoded",
             "User-Agent": "Calevid-Webhook/1.0",
             Accept: "application/json",
           },
-          body: JSON.stringify({
-            secret: String(WEBHOOK_SECRET).trim(),
-            email: String(email).trim(),
-            credits: Number(credits),
-            reference: String(reference).trim(),
-          }),
+          body: bodyParams,
         });
 
-        const text = await wpRes.text();
-        log("✅ WordPress response:", wpRes.status, text);
+        const result = await wpRes.json();
+
+        if (wpRes.ok) {
+          log("✅ WordPress response:", wpRes.status, result);
+          if (result.creditsAdded === 0) {
+            log("⚠️ Duplicate or already-applied reference:", reference);
+          }
+        } else {
+          log("❌ WordPress returned error:", wpRes.status, result);
+        }
       } catch (err) {
         log("❌ WordPress request failed:", err.name, err.message);
       } finally {
