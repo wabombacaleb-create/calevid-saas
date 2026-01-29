@@ -107,16 +107,15 @@ app.post(
     const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
     log("➡️ Calling WordPress:", url);
 
-    const agent = new https.Agent({ keepAlive: true });
-
     setImmediate(async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);
 
       try {
+        // ✅ Use the original httpsAgent here — this is the fix
         const wpRes = await fetch(url, {
           method: "POST",
-          agent,
+          agent: httpsAgent,
           signal: controller.signal,
           headers: {
             "Content-Type": "application/json",
