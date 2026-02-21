@@ -91,7 +91,7 @@ app.post(
 
     const { reference, customer, amount } = event.data || {};
     const email = (customer?.email || "").trim().toLowerCase();
-    const credits = Math.floor((amount || 0) / 100 / 150); // adjust 150 if credit price changes
+    const credits = Math.floor((amount || 0) / 100 / 150);
 
     if (!email || !reference || credits <= 0) {
       log("⚠️ Invalid data for credit application", { email, reference, credits });
@@ -155,7 +155,7 @@ app.post(
 app.use(express.json());
 
 /* =========================
-   VIDEO GENERATION (fal.ai)
+   VIDEO GENERATION (fal.ai) — FIXED
 ========================= */
 app.post("/generate-video", async (req, res) => {
   try {
@@ -165,18 +165,67 @@ app.post("/generate-video", async (req, res) => {
       return res.status(400).json({ error: "Prompt required" });
     }
 
-    const result = await fal.subscribe("fal-ai/ovi", {
+    log("🎬 Submitting Ovi generation:", prompt);
+
+    const submit = await fal.queue.submit("fal-ai/ovi", {
       input: { prompt },
-      logs: true,
     });
+
+    const requestId = submit.request_id;
+
+    if (!requestId) {
+      throw new Error("No request ID returned");
+    }
+
+    log("🆔 Request ID:", requestId);
+
+    let result;
+
+    while (true) {
+
+      const status = await fal.queue.status("fal-ai/ovi", {
+        requestId,
+      });
+
+      log("📊 Status:", status.status);
+
+      if (status.status === "COMPLETED") {
+
+        result = await fal.queue.result("fal-ai/ovi", {
+          requestId,
+        });
+
+        break;
+      }
+
+      if (status.status === "FAILED") {
+        throw new Error("Generation failed");
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+
+    const videoUrl = result?.data?.video?.url;
+
+    if (!videoUrl) {
+      throw new Error("No video URL returned");
+    }
+
+    log("✅ Video ready:", videoUrl);
 
     res.json({
       status: "success",
-      videoUrl: result?.data?.video?.url || null,
+      videoUrl: videoUrl,
     });
+
   } catch (err) {
+
     log("❌ Video generation failed", err.message);
-    res.status(500).json({ error: "Generation failed" });
+
+    res.status(500).json({
+      error: "Generation failed",
+    });
+
   }
 });
 
