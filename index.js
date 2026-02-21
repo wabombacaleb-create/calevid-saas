@@ -84,7 +84,6 @@ app.post(
 
     log("🔔 Paystack event:", event?.event, event?.data?.status);
 
-    // Immediately acknowledge Paystack
     res.sendStatus(200);
 
     if (event.event !== "charge.success" || event.data?.status !== "success") return;
@@ -155,27 +154,27 @@ app.post(
 app.use(express.json());
 
 /* =========================
-   VIDEO GENERATION (fal.ai) — FIXED
+   VIDEO GENERATION (fal.ai) — FULLY FIXED
 ========================= */
 app.post("/generate-video", async (req, res) => {
+
   try {
+
     const { prompt } = req.body;
 
-    if (!prompt) {
+    if (!prompt)
       return res.status(400).json({ error: "Prompt required" });
-    }
 
     log("🎬 Submitting Ovi generation:", prompt);
 
     const submit = await fal.queue.submit("fal-ai/ovi", {
-      input: { prompt },
+      input: { prompt }
     });
 
-    const requestId = submit.request_id;
+    const requestId = submit?.request_id;
 
-    if (!requestId) {
+    if (!requestId)
       throw new Error("No request ID returned");
-    }
 
     log("🆔 Request ID:", requestId);
 
@@ -184,7 +183,7 @@ app.post("/generate-video", async (req, res) => {
     while (true) {
 
       const status = await fal.queue.status("fal-ai/ovi", {
-        requestId,
+        requestId
       });
 
       log("📊 Status:", status.status);
@@ -192,46 +191,64 @@ app.post("/generate-video", async (req, res) => {
       if (status.status === "COMPLETED") {
 
         result = await fal.queue.result("fal-ai/ovi", {
-          requestId,
+          requestId
         });
 
         break;
+
       }
 
-      if (status.status === "FAILED") {
+      if (status.status === "FAILED")
         throw new Error("Generation failed");
-      }
 
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      await new Promise(resolve => setTimeout(resolve, 4000));
+
     }
 
-    const videoUrl = result?.data?.video?.url;
+    /* ===== FIXED OUTPUT EXTRACTION ===== */
 
-    if (!videoUrl) {
+    let videoUrl = null;
+
+    if (result?.data?.video?.url)
+      videoUrl = result.data.video.url;
+
+    else if (result?.data?.outputs?.[0]?.video?.url)
+      videoUrl = result.data.outputs[0].video.url;
+
+    else if (result?.video?.url)
+      videoUrl = result.video.url;
+
+    else if (result?.outputs?.[0]?.video?.url)
+      videoUrl = result.outputs[0].video.url;
+
+    if (!videoUrl)
       throw new Error("No video URL returned");
-    }
 
     log("✅ Video ready:", videoUrl);
 
     res.json({
       status: "success",
-      videoUrl: videoUrl,
-    });
-
-  } catch (err) {
-
-    log("❌ Video generation failed", err.message);
-
-    res.status(500).json({
-      error: "Generation failed",
+      videoUrl: videoUrl
     });
 
   }
+  catch (err) {
+
+    log("❌ Video generation failed:", err.message);
+
+    res.status(500).json({
+      error: "Generation failed"
+    });
+
+  }
+
 });
 
 /* =========================
    START SERVER
 ========================= */
 app.listen(PORT, () => {
+
   log(`🚀 Calevid backend running on port ${PORT}`);
+
 });
