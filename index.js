@@ -228,47 +228,36 @@ app.post("/generate-video", async (req, res) => {
 
     /* =========================
        SEND VIDEO TO WORDPRESS
+       — ADDED SNIPPET
     ========================= */
+    if (WP_SITE_URL && WEBHOOK_SECRET && email) {
 
-    try {
+      const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/save-video`;
 
-      if (WP_SITE_URL && WEBHOOK_SECRET && email) {
+      const bodyParams = new URLSearchParams({
+        secret: String(WEBHOOK_SECRET).trim(),
+        email: String(email).trim().toLowerCase(),
+        prompt: String(prompt).trim(),
+        videoUrl: String(videoUrl).trim()
+      });
 
-        const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/save-video`;
+      log("➡️ Sending video to WordPress:", wpUrl);
 
-        const bodyParams = new URLSearchParams({
-          secret: String(WEBHOOK_SECRET).trim(),
-          email: String(email).trim().toLowerCase(),
-          prompt: String(prompt).trim(),
-          videoUrl: String(videoUrl).trim()
-        });
-
-        log("➡️ Sending video to WordPress:", wpUrl);
-
-        fetch(wpUrl, {
-          method: "POST",
-          agent: httpsAgent,
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "Calevid-Video/1.0",
-            Accept: "application/json"
-          },
-          body: bodyParams
-        })
-        .then(r => r.json())
-        .then(data => log("✅ WordPress video saved:", data))
-        .catch(err => log("❌ WordPress save failed:", err.message));
-
-      } else {
-
-        log("⚠️ WP_SITE_URL, WEBHOOK_SECRET, or email missing");
-
-      }
-
-    } catch (err) {
-
-      log("❌ WordPress call error:", err.message);
-
+      fetch(wpUrl, {
+        method: "POST",
+        agent: httpsAgent,
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "User-Agent": "Calevid-Video/1.0",
+          Accept: "application/json"
+        },
+        body: bodyParams
+      })
+      .then(r => r.json())
+      .then(data => log("✅ WordPress video saved:", data))
+      .catch(err => log("❌ WordPress save failed:", err.message));
+    } else {
+      log("⚠️ WP_SITE_URL, WEBHOOK_SECRET, or email missing");
     }
 
     res.json({
