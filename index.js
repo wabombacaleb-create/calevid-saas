@@ -160,7 +160,7 @@ app.post("/generate-video", async (req, res) => {
 
   try {
 
-    const { prompt } = req.body;
+    const { prompt, email } = req.body;
 
     if (!prompt)
       return res.status(400).json({ error: "Prompt required" });
@@ -225,6 +225,51 @@ app.post("/generate-video", async (req, res) => {
       throw new Error("No video URL returned");
 
     log("✅ Video ready:", videoUrl);
+
+    /* =========================
+       SEND VIDEO TO WORDPRESS
+    ========================= */
+
+    try {
+
+      if (WP_SITE_URL && WEBHOOK_SECRET && email) {
+
+        const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/save-video`;
+
+        const bodyParams = new URLSearchParams({
+          secret: String(WEBHOOK_SECRET).trim(),
+          email: String(email).trim().toLowerCase(),
+          prompt: String(prompt).trim(),
+          videoUrl: String(videoUrl).trim()
+        });
+
+        log("➡️ Sending video to WordPress:", wpUrl);
+
+        fetch(wpUrl, {
+          method: "POST",
+          agent: httpsAgent,
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "Calevid-Video/1.0",
+            Accept: "application/json"
+          },
+          body: bodyParams
+        })
+        .then(r => r.json())
+        .then(data => log("✅ WordPress video saved:", data))
+        .catch(err => log("❌ WordPress save failed:", err.message));
+
+      } else {
+
+        log("⚠️ WP_SITE_URL, WEBHOOK_SECRET, or email missing");
+
+      }
+
+    } catch (err) {
+
+      log("❌ WordPress call error:", err.message);
+
+    }
 
     res.json({
       status: "success",
