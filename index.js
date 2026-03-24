@@ -276,6 +276,38 @@ app.post("/generate-video", async (req, res) => {
   }
 
 });
+app.get("/test-fal", async (req, res) => {
+
+  log("🧪 TEST: Checking Fal connectivity...");
+
+  try {
+
+    const submit = await fal.queue.submit("fal-ai/ovi", {
+      input: { prompt: "A simple test video of a cat walking" }
+    });
+
+    log("✅ TEST SUCCESS: Fal responded");
+    log("📦 TEST RESPONSE:", JSON.stringify(submit, null, 2));
+
+    return res.json({
+      success: true,
+      message: "Fal is reachable",
+      submit
+    });
+
+  } catch (err) {
+
+    log("❌ TEST FAILED: Cannot reach Fal");
+    log("ERROR:", err.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Fal not reachable",
+      error: err.message
+    });
+  }
+
+});
 
 /* =========================
    START SERVER
