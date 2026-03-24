@@ -278,7 +278,7 @@ app.post("/generate-video", async (req, res) => {
 });
 app.get("/test-fal", async (req, res) => {
 
-  log("🧪 TEST: Checking Fal connectivity...");
+  log("🧪 TEST: Submit + Poll");
 
   try {
 
@@ -286,29 +286,50 @@ app.get("/test-fal", async (req, res) => {
       input: { prompt: "A simple test video of a cat walking" }
     });
 
-    log("✅ TEST SUCCESS: Fal responded");
-    log("📦 TEST RESPONSE:", JSON.stringify(submit, null, 2));
+    const requestId = submit.request_id;
+
+    log("🆔 Request ID:", requestId);
+
+    let status;
+
+    for (let i = 0; i < 10; i++) {
+
+      status = await fal.queue.status("fal-ai/ovi", { requestId });
+
+      log(`📊 Attempt ${i + 1}:`, status.status);
+
+      if (status.status === "COMPLETED" || status.status === "completed") {
+
+        const result = await fal.queue.result("fal-ai/ovi", { requestId });
+
+        log("✅ RESULT:", JSON.stringify(result, null, 2));
+
+        return res.json({
+          success: true,
+          message: "Video completed",
+          result
+        });
+      }
+
+      await new Promise(r => setTimeout(r, 3000));
+    }
 
     return res.json({
-      success: true,
-      message: "Fal is reachable",
-      submit
+      success: false,
+      message: "Still processing after polling",
+      lastStatus: status.status
     });
 
   } catch (err) {
 
-    log("❌ TEST FAILED: Cannot reach Fal");
-    log("ERROR:", err.message);
+    log("❌ TEST FAILED:", err.message);
 
     return res.status(500).json({
-      success: false,
-      message: "Fal not reachable",
       error: err.message
     });
   }
 
 });
-
 /* =========================
    START SERVER
 ========================= */
