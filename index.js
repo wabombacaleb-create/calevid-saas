@@ -276,6 +276,22 @@ app.post("/generate-video", async (req, res) => {
   }
 
 });
+app.get("/test-fal", async (req, res) => {
+  try {
+    log("🧪 TEST: Sending dummy request to Fal (no video generated)");
+    const response = await fal.queue.submit("fal-ai/ovi", {
+      input: { prompt: "test request - do not generate video" }
+    });
+    res.json({
+      success: true,
+      message: "Fal request submitted (test)",
+      requestId: response?.request_id || response
+    });
+  } catch (err) {
+    log("❌ TEST FAILED:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 /* =========================
    START SERVER
 ========================= */
