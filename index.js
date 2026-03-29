@@ -299,6 +299,43 @@ app.post("/generate-video-queue", async (req, res) => {
     res.status(500).json({ error: "Queue submission failed" });
   }
 });
+app.get("/video-status", async (req, res) => {
+  try {
+    const requestId = req.query.requestId;
+    if (!requestId)
+      return res.status(400).json({ error: "requestId required" });
+
+    // Check Fal.ai queue status
+    const status = await fal.queue.status("fal-ai/ovi", { requestId });
+
+    if (!status) throw new Error("No status returned");
+
+    if (status.status === "COMPLETED") {
+      const result = await fal.queue.result("fal-ai/ovi", { requestId });
+
+      let videoUrl = null;
+      if (result?.data?.video?.url)
+        videoUrl = result.data.video.url;
+      else if (result?.data?.outputs?.[0]?.video?.url)
+        videoUrl = result.data.outputs[0].video.url;
+
+      if (!videoUrl)
+        throw new Error("No video URL returned");
+
+      return res.json({ status: "completed", videoUrl });
+    }
+
+    if (status.status === "FAILED")
+      return res.json({ status: "failed" });
+
+    // Still generating
+    res.json({ status: "processing" });
+
+  } catch (err) {
+    console.error("❌ /video-status failed:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 /* =========================
    START SERVER
 ========================= */
