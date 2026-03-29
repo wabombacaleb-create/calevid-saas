@@ -276,20 +276,27 @@ app.post("/generate-video", async (req, res) => {
   }
 
 });
-app.get("/test-fal", async (req, res) => {
+app.post("/generate-video-queue", async (req, res) => {
   try {
-    log("🧪 TEST: Sending dummy request to Fal (no video generated)");
-    const response = await fal.queue.submit("fal-ai/ovi", {
-      input: { prompt: "test request - do not generate video" }
-    });
+    const { prompt } = req.body;
+    if (!prompt)
+      return res.status(400).json({ error: "Prompt required" });
+
+    const submit = await fal.queue.submit("fal-ai/ovi", { input: { prompt } });
+    const requestId = submit?.request_id;
+
+    if (!requestId)
+      throw new Error("No request ID returned");
+
+    // ✅ Return immediately
     res.json({
-      success: true,
-      message: "Fal request submitted (test)",
-      requestId: response?.request_id || response
+      status: "queued",
+      requestId
     });
+
   } catch (err) {
-    log("❌ TEST FAILED:", err.message);
-    res.status(500).json({ success: false, error: err.message });
+    console.error("❌ Queue submission failed:", err.message);
+    res.status(500).json({ error: "Queue submission failed" });
   }
 });
 /* =========================
