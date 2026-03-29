@@ -336,6 +336,48 @@ app.get("/video-status", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+app.get("/video-status", async (req, res) => {
+  const requestId = req.query.requestId;
+  console.log("📌 /video-status called with requestId:", requestId);
+
+  if (!requestId) {
+    return res.status(400).json({ status: "error", error: "requestId required" });
+  }
+
+  try {
+    const status = await fal.queue.status("fal-ai/ovi", { requestId });
+    console.log("📊 Fal.ai status response:", status);
+
+    if (!status) {
+      return res.json({ status: "error", error: "No status returned from Fal.ai" });
+    }
+
+    if (status.status === "COMPLETED") {
+      let videoUrl = null;
+      try {
+        const result = await fal.queue.result("fal-ai/ovi", { requestId });
+        console.log("🎬 Fal.ai result:", result);
+
+        if (result?.data?.video?.url) videoUrl = result.data.video.url;
+        else if (result?.data?.outputs?.[0]?.video?.url) videoUrl = result.data.outputs[0].video.url;
+
+        if (!videoUrl) videoUrl = "Video URL not found in result";
+      } catch (e) {
+        console.error("❌ Error fetching video result:", e.message);
+        return res.json({ status: "error", error: "Failed to fetch video result" });
+      }
+
+      return res.json({ status: "completed", videoUrl });
+    }
+
+    if (status.status === "FAILED") return res.json({ status: "failed" });
+
+    return res.json({ status: "processing" });
+  } catch (err) {
+    console.error("❌ /video-status failed:", err.message);
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+});
 /* =========================
    START SERVER
 ========================= */
