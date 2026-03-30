@@ -84,13 +84,14 @@ app.post(
 
     log("🔔 Paystack event:", event?.event, event?.data?.status);
 
+    // Immediately acknowledge Paystack
     res.sendStatus(200);
 
     if (event.event !== "charge.success" || event.data?.status !== "success") return;
 
     const { reference, customer, amount } = event.data || {};
     const email = (customer?.email || "").trim().toLowerCase();
-    const credits = Math.floor((amount || 0) / 100 / 150);
+    const credits = Math.floor((amount || 0) / 100 / 150); // adjust 150 if credit price changes
 
     if (!email || !reference || credits <= 0) {
       log("⚠️ Invalid data for credit application", { email, reference, credits });
@@ -154,215 +155,34 @@ app.post(
 app.use(express.json());
 
 /* =========================
-   VIDEO GENERATION (fal.ai) — FULLY FIXED
+   VIDEO GENERATION (fal.ai)
 ========================= */
 app.post("/generate-video", async (req, res) => {
-
   try {
-
     const { prompt } = req.body;
 
-    if (!prompt)
+    if (!prompt) {
       return res.status(400).json({ error: "Prompt required" });
+    }
 
-    log("🎬 Submitting Ovi generation:", prompt);
-
-    const submit = await fal.queue.submit("fal-ai/ovi", {
-      input: { prompt }
+    const result = await fal.subscribe("fal-ai/ovi", {
+      input: { prompt },
+      logs: true,
     });
-
-    const requestId = submit?.request_id;
-
-    if (!requestId)
-      throw new Error("No request ID returned");
-
-    log("🆔 Request ID:", requestId);
-
-    let result;
-
-    while (true) {
-
-      const status = await fal.queue.status("fal-ai/ovi", {
-        requestId
-      });
-
-      log("📊 Status:", status.status);
-
-      if (status.status === "COMPLETED") {
-
-        result = await fal.queue.result("fal-ai/ovi", {
-          requestId
-        });
-
-        break;
-
-      }
-
-      if (status.status === "FAILED")
-        throw new Error("Generation failed");
-
-      await new Promise(resolve => setTimeout(resolve, 4000));
-
-    }
-
-    /* ===== FIXED OUTPUT EXTRACTION ===== */
-
-    let videoUrl = null;
-
-    if (result?.data?.video?.url)
-      videoUrl = result.data.video.url;
-
-    else if (result?.data?.outputs?.[0]?.video?.url)
-      videoUrl = result.data.outputs[0].video.url;
-
-    else if (result?.video?.url)
-      videoUrl = result.video.url;
-
-    else if (result?.outputs?.[0]?.video?.url)
-      videoUrl = result.outputs[0].video.url;
-
-    if (!videoUrl)
-      throw new Error("No video URL returned");
-
-    log("✅ Video ready:", videoUrl);
-
-    /* =========================
-       SEND VIDEO TO WORDPRESS
-    ========================= */
-    if (WP_SITE_URL && WEBHOOK_SECRET) {
-
-      const wpUrl = `${WP_SITE_URL}/wp-json/calevid/v1/save-video`;
-
-      const bodyParams = new URLSearchParams({
-        secret: String(WEBHOOK_SECRET).trim(),
-        prompt: String(prompt).trim(),
-        videoUrl: String(videoUrl).trim()
-      });
-
-      log("➡️ Sending video to WordPress:", wpUrl);
-
-      fetch(wpUrl, {
-        method: "POST",
-        agent: httpsAgent,
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "User-Agent": "Calevid-Video/1.0",
-          Accept: "application/json"
-        },
-        body: bodyParams
-      })
-      .then(r => r.json())
-      .then(data => log("✅ WordPress video saved:", data))
-      .catch(err => log("❌ WordPress save failed:", err.message));
-
-    } else {
-      log("⚠️ WP_SITE_URL or WEBHOOK_SECRET missing");
-    }
 
     res.json({
       status: "success",
-      videoUrl: videoUrl
+      videoUrl: result?.data?.video?.url || null,
     });
-
-  }
-  catch (err) {
-
-    log("❌ Video generation failed:", err.message);
-
-    res.status(500).json({
-      error: "Generation failed"
-    });
-
-  }
-
-});
-app.post("/generate-video-queue", async (req, res) => {
-  try {
-    const { prompt } = req.body;
-    if (!prompt)
-      return res.status(400).json({ error: "Prompt required" });
-
-    const submit = await fal.queue.submit("fal-ai/ovi", { input: { prompt } });
-    const requestId = submit?.request_id;
-
-    if (!requestId)
-      throw new Error("No request ID returned");
-
-    // ✅ Return immediately
-    res.json({
-      status: "queued",
-      requestId
-    });
-
   } catch (err) {
-    console.error("❌ Queue submission failed:", err.message);
-    res.status(500).json({ error: "Queue submission failed" });
+    log("❌ Video generation failed", err.message);
+    res.status(500).json({ error: "Generation failed" });
   }
 });
-app.get("/video-status", async (req, res) => {
-  try {
-    const requestId = req.query.requestId;
-    if (!requestId)
-      return res.status(400).json({ error: "requestId required" });
 
-    // Check Fal.ai queue status
-    const status = await fal.queue.status("fal-ai/ovi", { requestId });
-
-    if (!status) throw new Error("No status returned");
-
-    if (status.status === "COMPLETED") {
-      const result = await fal.queue.result("fal-ai/ovi", { requestId });
-
-      let videoUrl = null;
-      if (result?.data?.video?.url)
-        videoUrl = result.data.video.url;
-      else if (result?.data?.outputs?.[0]?.video?.url)
-        videoUrl = result.data.outputs[0].video.url;
-
-      if (!videoUrl)
-        throw new Error("No video URL returned");
-
-      return res.json({ status: "completed", videoUrl });
-    }
-
-    if (status.status === "FAILED")
-      return res.json({ status: "failed" });
-
-    // Still generating
-    res.json({ status: "processing" });
-
-  } catch (err) {
-    console.error("❌ /video-status failed:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-/* =========================
-   TEST ROUTE — Fal.ai connectivity
-========================= */
-app.get("/test-fal", async (req, res) => {
-  try {
-    log("🧪 TEST: Sending dummy request to Fal.ai (no video generation)");
-    
-    const response = await fal.queue.submit("fal-ai/ovi", {
-      input: { prompt: "test request - do not generate video" }
-    });
-
-    res.json({
-      success: true,
-      message: "Fal request submitted (test)",
-      requestId: response?.request_id || response
-    });
-
-  } catch (err) {
-    log("❌ TEST FAILED:", err.message);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
 /* =========================
    START SERVER
 ========================= */
 app.listen(PORT, () => {
-
   log(`🚀 Calevid backend running on port ${PORT}`);
-
 });
