@@ -26,6 +26,9 @@ const SAFE_MODE = process.env.SAFE_MODE === "true";
 fal.config({
   credentials: process.env.FAL_KEY,
 });
+const SAFE_MODE = process.env.SAFE_MODE === "true";
+
+console.log("SAFE_MODE:", SAFE_MODE);
 
 /* =========================
    GLOBAL MIDDLEWARE
