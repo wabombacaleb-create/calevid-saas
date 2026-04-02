@@ -135,16 +135,6 @@ app.post(
 app.use(express.json());
 
 /* =========================
-   SECURITY
-========================= */
-app.use("/generate-video", (req, res, next) => {
-  if (req.headers["x-api-key"] !== API_KEY) {
-    return res.status(403).json({ error: "Unauthorized" });
-  }
-  next();
-});
-
-/* =========================
    VIDEO GENERATION (SAFE MODE + ASYNC)
 ========================= */
 app.post("/generate-video", async (req, res) => {
