@@ -25,9 +25,11 @@ const API_KEY = process.env.API_KEY || "";
 fal.config({
   credentials: process.env.FAL_KEY,
 });
-const SAFE_MODE = process.env.SAFE_MODE === "true";
 
-console.log("SAFE_MODE:", SAFE_MODE);
+const SAFE_MODE = String(process.env.SAFE_MODE).toLowerCase() === "true";
+
+console.log("ENV SAFE_MODE:", process.env.SAFE_MODE);
+console.log("PARSED SAFE_MODE:", SAFE_MODE);
 
 /* =========================
    GLOBAL MIDDLEWARE
