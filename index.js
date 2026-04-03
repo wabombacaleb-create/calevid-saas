@@ -21,7 +21,6 @@ const WP_SITE_URL = (process.env.WP_SITE_URL || "")
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
 const WEBHOOK_SECRET = process.env.CALEVID_WEBHOOK_SECRET;
 const API_KEY = process.env.API_KEY || "";
-const SAFE_MODE = process.env.SAFE_MODE === "true";
 
 fal.config({
   credentials: process.env.FAL_KEY,
