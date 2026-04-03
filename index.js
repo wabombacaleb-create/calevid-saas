@@ -46,11 +46,6 @@ const log = (...args) =>
   console.log(`[${new Date().toISOString()}]`, ...args);
 
 /* =========================
-   JOB STORE (NEW)
-========================= */
-const jobs = new Map();
-
-/* =========================
    HEALTH CHECK
 ========================= */
 app.get("/", (req, res) => {
@@ -139,43 +134,41 @@ app.post(
 app.use(express.json());
 
 /* =========================
-   VIDEO GENERATION (SAFE MODE + ASYNC)
+   VIDEO GENERATION
 ========================= */
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt, testMode } = req.body;
 
-    if (!prompt)
+    if (!prompt) {
       return res.status(400).json({ error: "Prompt required" });
+    }
 
-    /* SAFE MODE */
+    /* SAFE MODE (UNCHANGED) */
     if (SAFE_MODE || testMode === true) {
       const requestId = "test_" + Date.now();
 
-      jobs.set(requestId, { status: "processing" });
-
-      setTimeout(() => {
-        jobs.set(requestId, {
-          status: "completed",
-          videoUrl: "https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4"
-        });
-      }, 5000);
-
-      return res.json({ status: "processing", requestId });
+      return res.json({
+        status: "processing",
+        requestId,
+      });
     }
 
-    /* REAL MODE */
+    /* REAL MODE (Fal.ai) */
     const submit = await fal.queue.submit("fal-ai/ovi", {
       input: { prompt },
     });
 
     const requestId = submit?.request_id;
 
-    jobs.set(requestId, { status: "processing" });
+    if (!requestId) {
+      throw new Error("No request_id returned from Fal");
+    }
 
-    processVideo(requestId);
-
-    res.json({ status: "processing", requestId });
+    res.json({
+      status: "processing",
+      requestId,
+    });
 
   } catch (err) {
     log("❌ Submit failed:", err.message);
@@ -184,37 +177,50 @@ app.post("/generate-video", async (req, res) => {
 });
 
 /* =========================
-   STATUS ENDPOINT
+   STATUS ENDPOINT (FIXED)
 ========================= */
-app.get("/video-status/:id", (req, res) => {
-  const job = jobs.get(req.params.id);
-  if (!job) return res.status(404).json({ error: "Not found" });
-  res.json(job);
-});
+app.get("/video-status/:id", async (req, res) => {
+  const requestId = req.params.id;
 
-/* =========================
-   BACKGROUND PROCESSOR
-========================= */
-async function processVideo(requestId) {
   try {
+    /* SAFE MODE SUPPORT */
+    if (requestId.startsWith("test_")) {
+      // simulate completion after ~5 seconds
+      const createdAt = parseInt(requestId.split("_")[1], 10);
+      const elapsed = Date.now() - createdAt;
+
+      if (elapsed > 5000) {
+        return res.json({
+          status: "completed",
+          videoUrl:
+            "https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4",
+        });
+      }
+
+      return res.json({ status: "processing" });
+    }
+
+    /* REAL MODE (Fal.ai) */
     const result = await fal.queue.result("fal-ai/ovi", { requestId });
 
     const videoUrl =
       result?.data?.video?.url ||
       result?.data?.outputs?.[0]?.video?.url;
 
-    jobs.set(requestId, {
-      status: "completed",
-      videoUrl,
-    });
+    if (videoUrl) {
+      return res.json({
+        status: "completed",
+        videoUrl,
+      });
+    }
+
+    return res.json({ status: "processing" });
 
   } catch (err) {
-    jobs.set(requestId, {
-      status: "failed",
-      error: err.message,
-    });
+    log("⏳ Still processing:", requestId);
+    return res.json({ status: "processing" });
   }
-}
+});
 
 /* =========================
    START SERVER
