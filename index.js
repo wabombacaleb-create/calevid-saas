@@ -221,6 +221,9 @@ app.get("/video-status/:id", async (req, res) => {
     return res.json({ status: "processing" });
   }
 });
+app.get("/video.mp4", (req, res) => {
+    res.redirect("https://www.w3schools.com/html/mov_bbb.mp4");
+});
 
 /* =========================
    START SERVER
