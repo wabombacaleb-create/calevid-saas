@@ -240,16 +240,6 @@ app.get("/video.mp4", async (req, res) => {
         res.status(500).send("Video test failed");
     }
 });
-const express = require('express');
-const app = express();
-
-app.get('/test-video', (req, res) => {
-    res.json({
-        success: true,
-        status: "completed",
-        videoUrl: "https://samplelib.com/lib/preview/mp4/sample-5s.mp4"
-    });
-});
 
 /* =========================
    START SERVER
