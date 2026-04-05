@@ -222,6 +222,25 @@ app.get("/video-status/:id", async (req, res) => {
   }
 });
 
+// Safe test video endpoint (no production impact)
+app.get("/video.mp4", async (req, res) => {
+    try {
+        const response = await fetch("https://www.w3schools.com/html/mov_bbb.mp4");
+
+        if (!response.ok) {
+            return res.status(500).send("Failed to fetch test video");
+        }
+
+        res.setHeader("Content-Type", "video/mp4");
+        res.setHeader("Access-Control-Allow-Origin", "*");
+
+        response.body.pipe(res);
+    } catch (error) {
+        console.error("Video test error:", error.message);
+        res.status(500).send("Video test failed");
+    }
+});
+
 /* =========================
    START SERVER
 ========================= */
