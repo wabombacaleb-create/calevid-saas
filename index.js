@@ -221,22 +221,7 @@ app.get("/video-status/:id", async (req, res) => {
     return res.json({ status: "processing" });
   }
 });
-import fetch from "node-fetch";
 
-app.get("/video.mp4", async (req, res) => {
-    try {
-
-        const video = await fetch("https://www.w3schools.com/html/mov_bbb.mp4");
-
-        res.setHeader("Content-Type", "video/mp4");
-        res.setHeader("Access-Control-Allow-Origin", "*");
-
-        video.body.pipe(res);
-
-    } catch (err) {
-        res.status(500).send("Video fetch error");
-    }
-});
 /* =========================
    START SERVER
 ========================= */
