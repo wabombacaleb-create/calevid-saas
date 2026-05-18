@@ -95,12 +95,15 @@ app.post(
     if (event.event !== "charge.success") return;
     if (event.data?.status !== "success") return;
 
-    const metadataType = event.data?.metadata?.type || "";
+    const metadata = event.data?.metadata || {};
+    log("PAYSTACK METADATA:", JSON.stringify(metadata));
 
-    log("PAYSTACK METADATA:", JSON.stringify(event.data?.metadata));
+    // Ignore subscriptions — WordPress handles them
+    const isSubscription =
+      metadata.type === "subscription" ||
+      !!metadata.plan_code;
 
-    // Skip ONLY subscriptions
-    if (metadataType === "subscription") {
+    if (isSubscription) {
       log("⏭ Subscription bypassed Node.js");
       return;
     }
@@ -108,7 +111,6 @@ app.post(
     const { reference, customer, amount } = event.data || {};
     const email = (customer?.email || "").trim().toLowerCase();
 
-    // 150 KES = 1 credit
     const credits = Math.floor((amount || 0) / 100 / 150);
 
     if (!email || !reference || credits <= 0) {
