@@ -94,9 +94,13 @@ app.post(
 
     if (event.event !== "charge.success" || event.data?.status !== "success") return;
 
-    const { reference, customer, amount } = event.data || {};
-    const email = (customer?.email || "").trim().toLowerCase();
-    const credits = Math.floor((amount || 0) / 100 / 150);
+// ignore subscription payments
+if (event.data?.plan || event.data?.subscription) return;
+
+const { reference, customer, amount } = event.data || {};
+const email = (customer?.email || "").trim().toLowerCase();
+
+const credits = Math.floor((amount || 0) / 100 / 150);
 
     if (!email || !reference || credits <= 0) return;
 
@@ -136,109 +140,62 @@ app.use(express.json());
 /* =========================
    VIDEO GENERATION
 ========================= */
+// Generate video
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt, testMode } = req.body;
+    if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
-    if (!prompt) {
-      return res.status(400).json({ error: "Prompt required" });
-    }
-
-    /* SAFE MODE (UNCHANGED) */
     if (SAFE_MODE || testMode === true) {
       const requestId = "test_" + Date.now();
-
-      return res.json({
-        status: "processing",
-        requestId,
-      });
+      return res.json({ status: "processing", requestId });
     }
 
-    /* REAL MODE (Fal.ai) */
-    const submit = await fal.queue.submit("fal-ai/ovi", {
-      input: { prompt },
-    });
-
+    const submit = await fal.queue.submit("fal-ai/ovi", { input: { prompt } });
     const requestId = submit?.request_id;
+    if (!requestId) throw new Error("No request_id returned from Fal");
 
-    if (!requestId) {
-      throw new Error("No request_id returned from Fal");
-    }
-
-    res.json({
-      status: "processing",
-      requestId,
-    });
-
+    res.json({ status: "processing", requestId });
   } catch (err) {
-    log("❌ Submit failed:", err.message);
+    console.error("❌ Submit failed:", err.message);
     res.status(500).json({ error: "Failed to start generation" });
   }
 });
 
-/* =========================
-   STATUS ENDPOINT (FIXED)
-========================= */
+// Status
 app.get("/video-status/:id", async (req, res) => {
   const requestId = req.params.id;
-
   try {
-    /* SAFE MODE SUPPORT */
     if (requestId.startsWith("test_")) {
-      // simulate completion after ~5 seconds
       const createdAt = parseInt(requestId.split("_")[1], 10);
       const elapsed = Date.now() - createdAt;
-
-      if (elapsed > 5000) {
-        return res.json({
-          status: "completed",
-          videoUrl:
-            "https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4",
-        });
-      }
-
+      if (elapsed > 5000) return res.json({
+        status: "completed",
+        videoUrl: "https://calevid-saas-8.onrender.com/video.mp4"
+      });
       return res.json({ status: "processing" });
     }
 
-    /* REAL MODE (Fal.ai) */
     const result = await fal.queue.result("fal-ai/ovi", { requestId });
-
-    const videoUrl =
-      result?.data?.video?.url ||
-      result?.data?.outputs?.[0]?.video?.url;
-
-    if (videoUrl) {
-      return res.json({
-        status: "completed",
-        videoUrl,
-      });
-    }
-
+    const videoUrl = result?.data?.video?.url || result?.data?.outputs?.[0]?.video?.url;
+    if (videoUrl) return res.json({ status: "completed", videoUrl });
     return res.json({ status: "processing" });
-
-  } catch (err) {
-    log("⏳ Still processing:", requestId);
-    return res.json({ status: "processing" });
-  }
+  } catch { return res.json({ status: "processing" }); }
 });
 
-// Safe test video endpoint (no production impact)
+// SAFE_MODE video endpoint
 app.get("/video.mp4", async (req, res) => {
-    try {
-        const response = await fetch("https://www.w3schools.com/html/mov_bbb.mp4");
+  try {
+    const response = await fetch("https://www.w3schools.com/html/mov_bbb.mp4");
+    if (!response.ok) return res.status(500).send("Failed to fetch test video");
 
-        if (!response.ok) {
-            return res.status(500).send("Failed to fetch test video");
-        }
-
-        res.setHeader("Content-Type", "video/mp4");
-        res.setHeader("Access-Control-Allow-Origin", "*");
-
-        response.body.pipe(res);
-    } catch (error) {
-        console.error("Video test error:", error.message);
-        res.status(500).send("Video test failed");
-    }
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    response.body.pipe(res);
+  } catch (err) {
+    console.error("Video test error:", err.message);
+    res.status(500).send("Video test failed");
+  }
 });
 
 /* =========================
