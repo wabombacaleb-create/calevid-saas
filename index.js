@@ -53,7 +53,7 @@ app.get("/", (req, res) => {
 });
 
 /* =========================
-   PAYSTACK WEBHOOK — UNTOUCHED
+   PAYSTACK WEBHOOK
 ========================= */
 app.post(
   "/paystack-webhook",
@@ -65,6 +65,7 @@ app.post(
     const signature = req.headers["x-paystack-signature"];
     const secretKey = PAYSTACK_SECRET || "";
 
+    // Validate signature
     if (!signature || !secretKey) {
       log("❌ Missing Paystack signature or secret");
       return res.sendStatus(401);
@@ -84,47 +85,48 @@ app.post(
     try {
       event = JSON.parse(body.toString("utf8"));
     } catch (e) {
-      log("❌ Failed to parse webhook body", e.message);
+      log("❌ Failed to parse webhook body:", e.message);
       return res.sendStatus(400);
     }
 
     log("🔔 Paystack event:", event?.event, event?.data?.status);
 
+    // acknowledge immediately
     res.sendStatus(200);
 
-    // only handle successful charges
+    // only successful charge payments
     if (event.event !== "charge.success") return;
     if (event.data?.status !== "success") return;
 
+    // debug metadata
+    log("PAYSTACK METADATA:", JSON.stringify(event.data?.metadata));
+
     /*
       IMPORTANT:
-      Ignore ALL subscription-related events.
       WordPress handles subscriptions.
-      Node handles only one-time credit purchases.
+      Node handles only Buy Credits.
     */
     const isSubscription =
-      event.data?.plan ||
-      event.data?.subscription ||
       event.data?.metadata?.type === "subscription";
 
     if (isSubscription) {
-      log("⏭ Subscription payment ignored (handled by WordPress)");
+      log("⏭ Subscription bypassed Node.js");
       return;
     }
 
     const { reference, customer, amount } = event.data || {};
     const email = (customer?.email || "").trim().toLowerCase();
 
-    // Convert KES amount to credits (150 KES = 1 credit)
+    // 150 KES = 1 credit
     const credits = Math.floor((amount || 0) / 100 / 150);
 
     if (!email || !reference || credits <= 0) {
-      log("❌ Invalid credit purchase payload");
+      log("❌ Invalid credit payload");
       return;
     }
 
     if (!WP_SITE_URL || !WEBHOOK_SECRET) {
-      log("❌ Missing WP config");
+      log("❌ Missing WP_SITE_URL or WEBHOOK_SECRET");
       return;
     }
 
@@ -139,7 +141,7 @@ app.post(
           reference,
         });
 
-        await fetch(url, {
+        const response = await fetch(url, {
           method: "POST",
           agent: httpsAgent,
           headers: {
@@ -148,7 +150,11 @@ app.post(
           body: bodyParams,
         });
 
-        log(`✅ Applied ${credits} credits to ${email}`);
+        const result = await response.text();
+
+        log(`✅ Credits applied: ${email} => ${credits}`);
+        log("WP response:", result);
+
       } catch (err) {
         log("❌ WP credits failed:", err.message);
       }
