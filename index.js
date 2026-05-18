@@ -92,17 +92,24 @@ app.post(
 
     res.sendStatus(200);
 
-    if (event.event !== "charge.success" || event.data?.status !== "success") return;
+if (event.event !== "charge.success" || event.data?.status !== "success") return;
 
-// ignore subscription payments
-if (event.data?.plan || event.data?.subscription) return;
+// ignore ONLY subscription payments
+const isSubscription =
+  event.data?.metadata?.type === "subscription";
+
+if (isSubscription) {
+  log("⏭ Subscription bypassed Node.js");
+  return;
+}
 
 const { reference, customer, amount } = event.data || {};
+
 const email = (customer?.email || "").trim().toLowerCase();
 
 const credits = Math.floor((amount || 0) / 100 / 150);
 
-    if (!email || !reference || credits <= 0) return;
+        if (!email || !reference || credits <= 0) return;
 
     if (!WP_SITE_URL || !WEBHOOK_SECRET) return;
 
