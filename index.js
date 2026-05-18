@@ -94,14 +94,8 @@ app.post(
 
 if (event.event !== "charge.success" || event.data?.status !== "success") return;
 
-// ignore ONLY subscription payments
-const isSubscription =
-  event.data?.metadata?.type === "subscription";
-
-if (isSubscription) {
-  log("⏭ Subscription bypassed Node.js");
-  return;
-}
+// ignore subscription payments completely
+if (event.data?.metadata?.type !== "credits") return;
 
 const { reference, customer, amount } = event.data || {};
 
