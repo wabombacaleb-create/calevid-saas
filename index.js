@@ -65,7 +65,7 @@ app.post(
     const signature = req.headers["x-paystack-signature"];
     const secretKey = PAYSTACK_SECRET || "";
 
-    // Validate signature
+    // validate signature
     if (!signature || !secretKey) {
       log("❌ Missing Paystack signature or secret");
       return res.sendStatus(401);
@@ -94,23 +94,21 @@ app.post(
     // acknowledge immediately
     res.sendStatus(200);
 
-    // only successful charge payments
+    // only successful charges
     if (event.event !== "charge.success") return;
     if (event.data?.status !== "success") return;
 
-    // debug metadata
+    const metadataType = event.data?.metadata?.type || "";
+
     log("PAYSTACK METADATA:", JSON.stringify(event.data?.metadata));
 
     /*
       IMPORTANT:
-      WordPress handles subscriptions.
-      Node handles only Buy Credits.
+      ONLY process Buy Credits.
+      WordPress handles all subscriptions.
     */
-    const isSubscription =
-      event.data?.metadata?.type === "subscription";
-
-    if (isSubscription) {
-      log("⏭ Subscription bypassed Node.js");
+    if (metadataType !== "credits") {
+      log("⏭ Non-credit payment ignored (handled by WordPress)");
       return;
     }
 
@@ -126,7 +124,7 @@ app.post(
     }
 
     if (!WP_SITE_URL || !WEBHOOK_SECRET) {
-      log("❌ Missing WP_SITE_URL or WEBHOOK_SECRET");
+      log("❌ Missing WP config");
       return;
     }
 
