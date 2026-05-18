@@ -95,20 +95,20 @@ app.post(
     if (event.event !== "charge.success") return;
     if (event.data?.status !== "success") return;
 
-    const { reference, customer, amount } = event.data || {};
-    const email = (customer?.email || "").trim().toLowerCase();
+    const metadataType = event.data?.metadata?.type || "";
 
-    log("PAYSTACK REF:", reference);
+    log("PAYSTACK METADATA:", JSON.stringify(event.data?.metadata));
 
-    /*
-      ONLY process references that begin with "credit"
-      Everything else is handled by WordPress
-    */
-    if (!reference?.toLowerCase().startsWith("credit")) {
-      log("⏭ Not a credit purchase — ignored");
+    // Skip ONLY subscriptions
+    if (metadataType === "subscription") {
+      log("⏭ Subscription bypassed Node.js");
       return;
     }
 
+    const { reference, customer, amount } = event.data || {};
+    const email = (customer?.email || "").trim().toLowerCase();
+
+    // 150 KES = 1 credit
     const credits = Math.floor((amount || 0) / 100 / 150);
 
     if (!email || !reference || credits <= 0) {
