@@ -92,26 +92,41 @@ app.post(
 
     res.sendStatus(200);
 
-if (event.event !== "charge.success" || event.data?.status !== "success") return;
+    // only handle successful charges
+    if (event.event !== "charge.success") return;
+    if (event.data?.status !== "success") return;
 
-// ignore ONLY subscription payments
-const isSubscription =
-  event.data?.metadata?.type === "subscription";
+    /*
+      IMPORTANT:
+      Ignore ALL subscription-related events.
+      WordPress handles subscriptions.
+      Node handles only one-time credit purchases.
+    */
+    const isSubscription =
+      event.data?.plan ||
+      event.data?.subscription ||
+      event.data?.metadata?.type === "subscription";
 
-if (isSubscription) {
-  log("⏭ Subscription bypassed Node.js");
-  return;
-}
+    if (isSubscription) {
+      log("⏭ Subscription payment ignored (handled by WordPress)");
+      return;
+    }
 
-const { reference, customer, amount } = event.data || {};
+    const { reference, customer, amount } = event.data || {};
+    const email = (customer?.email || "").trim().toLowerCase();
 
-const email = (customer?.email || "").trim().toLowerCase();
+    // Convert KES amount to credits (150 KES = 1 credit)
+    const credits = Math.floor((amount || 0) / 100 / 150);
 
-const credits = Math.floor((amount || 0) / 100 / 150);
+    if (!email || !reference || credits <= 0) {
+      log("❌ Invalid credit purchase payload");
+      return;
+    }
 
-        if (!email || !reference || credits <= 0) return;
-
-    if (!WP_SITE_URL || !WEBHOOK_SECRET) return;
+    if (!WP_SITE_URL || !WEBHOOK_SECRET) {
+      log("❌ Missing WP config");
+      return;
+    }
 
     const url = `${WP_SITE_URL}/wp-json/calevid/v1/apply-credits`;
 
@@ -127,18 +142,19 @@ const credits = Math.floor((amount || 0) / 100 / 150);
         await fetch(url, {
           method: "POST",
           agent: httpsAgent,
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
           body: bodyParams,
         });
 
-        log("✅ Credits applied:", email, credits);
+        log(`✅ Applied ${credits} credits to ${email}`);
       } catch (err) {
         log("❌ WP credits failed:", err.message);
       }
     });
   }
 );
-
 /* =========================
    JSON PARSER (DO NOT MOVE)
 ========================= */
