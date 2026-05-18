@@ -65,7 +65,6 @@ app.post(
     const signature = req.headers["x-paystack-signature"];
     const secretKey = PAYSTACK_SECRET || "";
 
-    // validate signature
     if (!signature || !secretKey) {
       log("❌ Missing Paystack signature or secret");
       return res.sendStatus(401);
@@ -91,40 +90,29 @@ app.post(
 
     log("🔔 Paystack event:", event?.event, event?.data?.status);
 
-    // acknowledge immediately
     res.sendStatus(200);
 
-    // only successful charges
     if (event.event !== "charge.success") return;
     if (event.data?.status !== "success") return;
-
-    const metadataType = event.data?.metadata?.type || "";
-
-    log("PAYSTACK METADATA:", JSON.stringify(event.data?.metadata));
-
-    /*
-      IMPORTANT:
-      ONLY process Buy Credits.
-      WordPress handles all subscriptions.
-    */
-    if (metadataType !== "credits") {
-      log("⏭ Non-credit payment ignored (handled by WordPress)");
-      return;
-    }
 
     const { reference, customer, amount } = event.data || {};
     const email = (customer?.email || "").trim().toLowerCase();
 
-    // 150 KES = 1 credit
+    log("PAYSTACK REF:", reference);
+
+    /*
+      ONLY process references that begin with "credit"
+      Everything else is handled by WordPress
+    */
+    if (!reference?.toLowerCase().startsWith("credit")) {
+      log("⏭ Not a credit purchase — ignored");
+      return;
+    }
+
     const credits = Math.floor((amount || 0) / 100 / 150);
 
     if (!email || !reference || credits <= 0) {
       log("❌ Invalid credit payload");
-      return;
-    }
-
-    if (!WP_SITE_URL || !WEBHOOK_SECRET) {
-      log("❌ Missing WP config");
       return;
     }
 
