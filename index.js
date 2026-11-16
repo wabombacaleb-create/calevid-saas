@@ -1,3 +1,4 @@
+
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -21,6 +22,8 @@ const WP_SITE_URL = (process.env.WP_SITE_URL || "")
 const PAYSTACK_SECRET = process.env.PAYSTACK_SECRET_KEY;
 const WEBHOOK_SECRET = process.env.CALEVID_WEBHOOK_SECRET;
 const API_KEY = process.env.API_KEY || "";
+
+const FAL_VIDEO_MODEL = "minimax/h3-max-turbo/text-to-video";
 
 fal.config({
   credentials: process.env.FAL_KEY,
@@ -149,58 +152,124 @@ app.post(
     });
   }
 );
+
 /* =========================
    JSON PARSER (DO NOT MOVE)
 ========================= */
 app.use(express.json());
 
 /* =========================
-   VIDEO GENERATION
+   VIDEO GENERATION - MINIMAX H3 MAX TURBO
 ========================= */
+
 // Generate video
 app.post("/generate-video", async (req, res) => {
   try {
     const { prompt, testMode } = req.body;
-    if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
-    if (SAFE_MODE || testMode === true) {
-      const requestId = "test_" + Date.now();
-      return res.json({ status: "processing", requestId });
+    if (!prompt || typeof prompt !== "string" || !prompt.trim()) {
+      return res.status(400).json({ error: "Prompt required" });
     }
 
-    const submit = await fal.queue.submit("fal-ai/ovi", { input: { prompt } });
-    const requestId = submit?.request_id;
-    if (!requestId) throw new Error("No request_id returned from Fal");
+    const duration = Number(req.body.duration ?? 5);
 
-    res.json({ status: "processing", requestId });
+    if (![5, 10, 15].includes(duration)) {
+      return res.status(400).json({
+        error: "Invalid duration. Choose 5, 10 or 15 seconds."
+      });
+    }
+
+    // SAFE MODE / TEST MODE
+    if (SAFE_MODE || testMode === true) {
+      const requestId = "test_" + Date.now();
+
+      return res.json({
+        status: "processing",
+        requestId,
+        duration
+      });
+    }
+
+    // Submit video generation to Fal AI
+    const submit = await fal.queue.submit(FAL_VIDEO_MODEL, {
+      input: {
+        prompt: prompt.trim(),
+        duration,
+        resolution: "768P",
+        prompt_expansion_mode: "balanced",
+        enable_safety_checker: true
+      }
+    });
+
+    const requestId = submit?.request_id;
+
+    if (!requestId) {
+      throw new Error("No request_id returned from Fal");
+    }
+
+    log("Video submitted:", {
+      requestId,
+      duration
+    });
+
+    return res.json({
+      status: "processing",
+      requestId,
+      duration
+    });
+
   } catch (err) {
     console.error("❌ Submit failed:", err.message);
-    res.status(500).json({ error: "Failed to start generation" });
+
+    return res.status(500).json({
+      error: "Failed to start generation"
+    });
   }
 });
 
 // Status
 app.get("/video-status/:id", async (req, res) => {
   const requestId = req.params.id;
+
   try {
     if (requestId.startsWith("test_")) {
       const createdAt = parseInt(requestId.split("_")[1], 10);
       const elapsed = Date.now() - createdAt;
-      if (elapsed > 5000) return res.json({
-        status: "completed",
-        videoUrl: "https://calevid-saas-8.onrender.com/video.mp4"
-      });
+
+      if (elapsed > 5000) {
+        return res.json({
+          status: "completed",
+          videoUrl: "https://calevid-saas-8.onrender.com/video.mp4"
+        });
+      }
+
       return res.json({ status: "processing" });
     }
 
-    const result = await fal.queue.result("fal-ai/ovi", { requestId });
-    const videoUrl = result?.data?.video?.url || result?.data?.outputs?.[0]?.video?.url;
-    if (videoUrl) return res.json({ status: "completed", videoUrl });
+    const result = await fal.queue.result(FAL_VIDEO_MODEL, {
+      requestId
+    });
+
+    const videoUrl = result?.data?.video?.url;
+
+    if (videoUrl) {
+      return res.json({
+        status: "completed",
+        videoUrl
+      });
+    }
+
     return res.json({ status: "processing" });
-  } catch { return res.json({ status: "processing" }); }
+
+  } catch (err) {
+    console.error("❌ Status check failed:", err.message);
+    return res.json({ status: "processing" });
+  }
 });
 
-// SAFE_MODE video endpoint
+/* =========================
+   SAFE_MODE video endpoint
+========================= */
 app.get("/video.mp4", async (req, res) => {
   try {
     const response = await fetch("https://www.w3schools.com/html/mov_bbb.mp4");
