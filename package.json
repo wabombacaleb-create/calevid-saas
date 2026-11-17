@@ -1,10 +1,11 @@
+
 {
   "name": "calevid-backend",
   "version": "1.1.0",
   "type": "module",
-  "main": "server.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "@fal-ai/client": "^1.8.1",
