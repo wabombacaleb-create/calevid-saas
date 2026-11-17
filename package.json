@@ -1,6 +1,6 @@
 {
   "name": "calevid-backend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -8,6 +8,8 @@
   },
   "dependencies": {
     "@fal-ai/client": "^1.8.1",
+    "@aws-sdk/client-s3": "^3.800.0",
+    "@aws-sdk/s3-request-presigner": "^3.800.0",
     "cors": "^2.8.5",
     "express": "^4.22.1",
     "node-fetch": "^3.3.2"
