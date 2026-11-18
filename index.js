@@ -148,6 +148,13 @@ app.post(
     const planCode = String(metadata.plan_code || data.plan?.plan_code || data.subscription?.plan?.plan_code || data.plan_code || "");
     const isSubscriptionPayment = Boolean(metadata.type === "subscription" || data.plan || data.subscription || event.event === "invoice.payment_success");
 
+    // Match the original integration: one-off subscription checkout events are
+    // handled by WordPress and must never be converted into credit purchases.
+    if (event.event === "charge.success" && (metadata.type === "subscription" || metadata.plan_code)) {
+      log("Subscription charge handled by WordPress; skipping credit application");
+      return res.sendStatus(200);
+    }
+
     try {
       let endpoint;
       let params;
@@ -160,7 +167,9 @@ app.post(
         params = new URLSearchParams({ secret: WEBHOOK_SECRET, email, plan_code: planCode, reference });
       } else {
         if (event?.event !== "charge.success") return res.sendStatus(200);
-        if (metadata.calevid_purchase !== "credits") return res.sendStatus(200);
+        // Preserve compatibility with the original dashboard checkout, which does not
+        // attach calevid_purchase metadata. Subscription transactions are routed above.
+        // This webhook endpoint is dedicated to Calevid Paystack payments.
         const amountKobo = Number(data.amount || 0);
         const priceKobo = 150 * 100;
         if (String(data.currency || "").toUpperCase() !== "KES" || !reference || !email || !Number.isSafeInteger(amountKobo) || amountKobo <= 0 || amountKobo % priceKobo !== 0) {
@@ -203,7 +212,7 @@ app.use(express.json());
 ========================= */
 
 // Generate video
-app.post("/generate-video", requireApiKey, async (req, res) => {
+app.post("/generate-video", async (req, res) => {
   try {
     const { prompt, testMode } = req.body;
 
@@ -268,7 +277,7 @@ app.post("/generate-video", requireApiKey, async (req, res) => {
 });
 
 // Status
-app.get("/video-status/:id", requireApiKey, async (req, res) => {
+app.get("/video-status/:id", async (req, res) => {
   const requestId = String(req.params.id || "");
   if (!/^[A-Za-z0-9_-]{5,160}$/.test(requestId)) return res.status(400).json({ error: "Invalid request ID" });
 
