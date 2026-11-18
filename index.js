@@ -143,6 +143,17 @@ app.post(
 
     const data = event.data || {};
     const metadata = data.metadata || {};
+log("PAYSTACK EVENT DIAGNOSTIC:", {
+  event: event.event,
+  reference: data.reference || data.transaction?.reference || null,
+  amount: data.amount || null,
+  currency: data.currency || null,
+  metadataType: metadata.type || null,
+  hasPlanCode: Boolean(metadata.plan_code || data.plan_code),
+  hasPlan: Boolean(data.plan),
+  hasSubscription: Boolean(data.subscription),
+  hasCustomerEmail: Boolean(data.customer?.email)
+});
     const reference = String(data.reference || data.transaction?.reference || data.invoice_code || "");
     const email = String(data.customer?.email || data.customer?.customer_code && data.customer?.email || "").trim().toLowerCase();
     const planCode = String(metadata.plan_code || data.plan?.plan_code || data.subscription?.plan?.plan_code || data.plan_code || "");
