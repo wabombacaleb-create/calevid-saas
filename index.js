@@ -143,17 +143,56 @@ app.post(
 
     const data = event.data || {};
     const metadata = data.metadata || {};
+
 log("PAYSTACK EVENT DIAGNOSTIC:", {
-  event: event.event,
-  reference: data.reference || data.transaction?.reference || null,
-  amount: data.amount || null,
-  currency: data.currency || null,
-  metadataType: metadata.type || null,
-  hasPlanCode: Boolean(metadata.plan_code || data.plan_code),
-  hasPlan: Boolean(data.plan),
-  hasSubscription: Boolean(data.subscription),
-  hasCustomerEmail: Boolean(data.customer?.email)
+  timestamp: new Date().toISOString(),
+
+  event: event?.event,
+
+  transaction: {
+    reference: data.reference || data.transaction?.reference || null,
+    amount: data.amount ?? null,
+    currency: data.currency || null,
+    status: data.status || null,
+    channel: data.channel || null,
+    domain: data.domain || null,
+    id: data.id || null,
+    gateway_response: data.gateway_response || null
+  },
+
+  customer: {
+    hasEmail: Boolean(data.customer?.email),
+    customerCode: data.customer?.customer_code || null,
+    customerId: data.customer?.id || null
+  },
+
+  metadata: metadata || null,
+
+  plan: data.plan || null,
+
+  subscription: data.subscription
+    ? {
+        status: data.subscription.status || null,
+        subscriptionCode:
+          data.subscription.subscription_code || null,
+        emailTokenPresent:
+          Boolean(data.subscription.email_token),
+        plan: data.subscription.plan || null
+      }
+    : null,
+
+  classification: {
+    metadataType: metadata.type || null,
+    hasPlanCode: Boolean(
+      metadata.plan_code || data.plan_code
+    ),
+    hasPlan: Boolean(data.plan),
+    hasSubscription: Boolean(data.subscription),
+    isInvoicePayment:
+      event?.event === "invoice.payment_success"
+  }
 });
+
     const reference = String(data.reference || data.transaction?.reference || data.invoice_code || "");
     const email = String(data.customer?.email || data.customer?.customer_code && data.customer?.email || "").trim().toLowerCase();
     const planCode = String(metadata.plan_code || data.plan?.plan_code || data.subscription?.plan?.plan_code || data.plan_code || "");
