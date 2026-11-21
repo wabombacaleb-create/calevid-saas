@@ -281,18 +281,32 @@ app.post("/generate-video", async (req, res) => {
 });
 
 
-// Status and Fal-authoritative job reconciliation
-app.get("/video-status/:id", async (req, res) => {
+/* =========================================
+   VIDEO STATUS — FAL-AUTHORITATIVE CHECK
+========================================= */
+
+app.get("/video-status/:id", requireApiKey, async (req, res) => {
   const requestId = String(req.params.id || "");
 
   if (!/^[A-Za-z0-9_-]{5,160}$/.test(requestId)) {
-    return res.status(400).json({ error: "Invalid request ID" });
+    return res.status(400).json({
+      error: "Invalid request ID"
+    });
   }
 
   try {
-    // Preserve existing SAFE_MODE / test functionality.
+    /* -------------------------------------
+       TEST MODE
+    ------------------------------------- */
+
     if (requestId.startsWith("test_")) {
       const createdAt = parseInt(requestId.split("_")[1], 10);
+
+      if (!Number.isFinite(createdAt)) {
+        return res.status(400).json({
+          error: "Invalid test request ID"
+        });
+      }
 
       if (Date.now() - createdAt > 5000) {
         return res.json({
@@ -302,68 +316,65 @@ app.get("/video-status/:id", async (req, res) => {
         });
       }
 
-      return res.json({ status: "processing" });
+      return res.json({
+        status: "processing",
+        testMode: true
+      });
     }
 
-    /*
-     * STEP 1: Ask Fal for the authoritative queue status.
-     *
-     * A network error, API error or temporary inability to
-     * retrieve status is NOT evidence of generation failure.
-     */
+    /* -------------------------------------
+       1. CHECK ACTUAL FAL JOB STATUS
+    ------------------------------------- */
+
     let falStatus;
 
     try {
-      falStatus = await fal.queue.status(FAL_VIDEO_MODEL, {
-        requestId
-      });
+      falStatus = await fal.queue.status(
+        FAL_VIDEO_MODEL,
+        { requestId }
+      );
     } catch (statusError) {
-      log("Fal status check temporarily unavailable:", {
+      log("Fal status check unavailable:", {
         requestId,
         error: statusError.message
       });
 
-      return res.json({ status: "processing" });
+      // A failed status check does NOT mean
+      // that Fal has failed the generation.
+      return res.json({
+        status: "processing",
+        stage: "checking_provider"
+      });
     }
 
-    /*
-     * STEP 2: Keep active Fal jobs processing.
-     */
+    const providerStatus = falStatus?.status;
+
+    /* -------------------------------------
+       2. FAL IS STILL PROCESSING
+    ------------------------------------- */
+
     if (
-      falStatus?.status === "IN_QUEUE" ||
-      falStatus?.status === "IN_PROGRESS"
+      providerStatus === "IN_QUEUE" ||
+      providerStatus === "IN_PROGRESS"
     ) {
       return res.json({
         status: "processing",
-        falStatus: falStatus.status
+        falStatus: providerStatus
       });
     }
 
-    /*
-     * Unknown or incomplete provider responses must never
-     * be converted into invented failures.
-     */
-    if (falStatus?.status !== "COMPLETED") {
-      log("Unexpected Fal status:", {
-        requestId,
-        status: falStatus?.status
-      });
+    /* -------------------------------------
+       3. ONLY CONFIRMED FAL FAILURE
+       IS TREATED AS GENERATION FAILURE
+    ------------------------------------- */
 
-      return res.json({ status: "processing" });
-    }
-
-    /*
-     * STEP 3: Fal has confirmed a terminal generation failure.
-     *
-     * Fal documents error and error_type as failure information.
-     * Return HTTP 503 because the existing WordPress v7.2.4
-     * handler recognizes this response as a terminal failure.
-     */
-    if (falStatus.error || falStatus.error_type) {
+    if (
+      providerStatus === "COMPLETED" &&
+      (falStatus?.error || falStatus?.error_type)
+    ) {
       log("Fal confirmed generation failure:", {
         requestId,
-        error: falStatus.error || "",
-        errorType: falStatus.error_type || ""
+        error: falStatus.error || falStatus.error_type
       });
 
       return res.status(503).json({
@@ -373,23 +384,42 @@ app.get("/video-status/:id", async (req, res) => {
       });
     }
 
-    /*
-     * STEP 4: Fal confirms completion.
-     *
-     * Retrieve the actual result, including late completions.
-     */
+    /* -------------------------------------
+       4. UNKNOWN OR UNCONFIRMED STATUS
+       MUST NOT TRIGGER A REFUND
+    ------------------------------------- */
+
+    if (providerStatus !== "COMPLETED") {
+      log("Fal returned an unconfirmed status:", {
+        requestId,
+        falStatus: providerStatus
+      });
+
+      return res.json({
+        status: "processing",
+        stage: "awaiting_provider_confirmation"
+      });
+    }
+
+    /* -------------------------------------
+       5. FAL COMPLETED — RETRIEVE RESULT
+    ------------------------------------- */
+
     let result;
 
     try {
-      result = await fal.queue.result(FAL_VIDEO_MODEL, {
-        requestId
-      });
+      result = await fal.queue.result(
+        FAL_VIDEO_MODEL,
+        { requestId }
+      );
     } catch (resultError) {
-      log("Fal completed but result retrieval needs retry:", {
+      log("Fal result retrieval pending:", {
         requestId,
         error: resultError.message
       });
 
+      // Do not refund. The result may still
+      // be retrievable.
       return res.json({
         status: "processing",
         stage: "retrieving_result"
@@ -399,60 +429,103 @@ app.get("/video-status/:id", async (req, res) => {
     const sourceUrl = result?.data?.video?.url;
 
     if (!sourceUrl) {
-      log("Fal completed without a usable video URL:", requestId);
+      log("Fal completed but returned no video URL:", {
+        requestId
+      });
 
       return res.json({
         status: "processing",
-        stage: "awaiting_result"
+        stage: "awaiting_video_result"
       });
     }
 
-    /*
-     * STEP 5: Save the successfully generated video to R2.
-     *
-     * Storage problems are NOT generation failures.
-     * Keep the job recoverable and retry storage on the
-     * next status check. Do not refund these jobs.
-     */
+    /* -------------------------------------
+       6. SAVE SUCCESSFUL VIDEO TO R2
+    ------------------------------------- */
+
+    let storageKey;
+
     try {
-      const storageKey = await saveFalVideoToR2(
+      storageKey = await saveFalVideoToR2(
         requestId,
         sourceUrl
       );
-
-      const videoUrl = await createVideoUrl(storageKey);
-
-      log("Video successfully completed and saved:", {
-        requestId,
-        storageKey
-      });
-
-      return res.json({
-        status: "completed",
-        videoUrl,
-        storageKey
-      });
-
     } catch (storageError) {
-      log("R2 storage/recovery pending:", {
+      log("R2 video storage failed:", {
         requestId,
         error: storageError.message
       });
 
+      // Storage failure is NOT Fal generation
+      // failure. Keep the job recoverable.
       return res.json({
         status: "processing",
         stage: "saving_video"
       });
     }
 
-  } catch (err) {
-    log("Video status reconciliation error:", {
-      requestId,
-      error: err.message
+    /* -------------------------------------
+       7. CREATE SECURE VIDEO URL
+    ------------------------------------- */
+
+    let videoUrl;
+
+    try {
+      videoUrl = await createVideoUrl(storageKey);
+    } catch (urlError) {
+      log("Video URL creation failed:", {
+        requestId,
+        error: urlError.message
+      });
+
+      return res.json({
+        status: "processing",
+        stage: "creating_video_url"
+      });
+    }
+
+    /* -------------------------------------
+       8. CONFIRMED SUCCESS
+    ------------------------------------- */
+
+    return res.json({
+      status: "completed",
+      videoUrl,
+      storageKey
     });
 
-    // Unexpected errors never become invented failures.
-    return res.json({ status: "processing" });
+  } catch (error) {
+    log("Video status endpoint error:", {
+      requestId,
+      error: error.message
+    });
+
+    // Unexpected errors must not cause refunds.
+    return res.json({
+      status: "processing"
+    });
+  }
+});
+
+app.get("/video-url", requireApiKey, async (req, res) => {
+  try {
+    const key = String(req.query.key || "");
+    const videoUrl = await createVideoUrl(key);
+    return res.json({ videoUrl, expiresIn: 3600 });
+  } catch (err) {
+    log("Signed URL error:", err.message);
+    return res.status(400).json({ error: "Unable to create video download link" });
+  }
+});
+
+app.get("/video-url/*", requireApiKey, async (req, res) => {
+  try {
+    const key = decodeURIComponent(req.params[0] || "");
+    const videoUrl = await createVideoUrl(key);
+    return res.json({ videoUrl, expiresIn: 3600 });
+  } catch (err) {
+    log("Signed URL error:", err.message);
+    return res.status(400).json({ error: "Unable to create video download link" });
   }
 });
 
