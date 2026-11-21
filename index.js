@@ -280,65 +280,179 @@ app.post("/generate-video", async (req, res) => {
   }
 });
 
-// Status
+
+// Status and Fal-authoritative job reconciliation
 app.get("/video-status/:id", async (req, res) => {
   const requestId = String(req.params.id || "");
-  if (!/^[A-Za-z0-9_-]{5,160}$/.test(requestId)) return res.status(400).json({ error: "Invalid request ID" });
+
+  if (!/^[A-Za-z0-9_-]{5,160}$/.test(requestId)) {
+    return res.status(400).json({ error: "Invalid request ID" });
+  }
 
   try {
+    // Preserve existing SAFE_MODE / test functionality.
     if (requestId.startsWith("test_")) {
       const createdAt = parseInt(requestId.split("_")[1], 10);
+
       if (Date.now() - createdAt > 5000) {
-        return res.json({ status: "completed", videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4", testMode: true });
+        return res.json({
+          status: "completed",
+          videoUrl: "https://www.w3schools.com/html/mov_bbb.mp4",
+          testMode: true
+        });
       }
+
       return res.json({ status: "processing" });
     }
 
+    /*
+     * STEP 1: Ask Fal for the authoritative queue status.
+     *
+     * A network error, API error or temporary inability to
+     * retrieve status is NOT evidence of generation failure.
+     */
+    let falStatus;
+
+    try {
+      falStatus = await fal.queue.status(FAL_VIDEO_MODEL, {
+        requestId
+      });
+    } catch (statusError) {
+      log("Fal status check temporarily unavailable:", {
+        requestId,
+        error: statusError.message
+      });
+
+      return res.json({ status: "processing" });
+    }
+
+    /*
+     * STEP 2: Keep active Fal jobs processing.
+     */
+    if (
+      falStatus?.status === "IN_QUEUE" ||
+      falStatus?.status === "IN_PROGRESS"
+    ) {
+      return res.json({
+        status: "processing",
+        falStatus: falStatus.status
+      });
+    }
+
+    /*
+     * Unknown or incomplete provider responses must never
+     * be converted into invented failures.
+     */
+    if (falStatus?.status !== "COMPLETED") {
+      log("Unexpected Fal status:", {
+        requestId,
+        status: falStatus?.status
+      });
+
+      return res.json({ status: "processing" });
+    }
+
+    /*
+     * STEP 3: Fal has confirmed a terminal generation failure.
+     *
+     * Fal documents error and error_type as failure information.
+     * Return HTTP 503 because the existing WordPress v7.2.4
+     * handler recognizes this response as a terminal failure.
+     */
+    if (falStatus.error || falStatus.error_type) {
+      log("Fal confirmed generation failure:", {
+        requestId,
+        error: falStatus.error || "",
+        errorType: falStatus.error_type || ""
+      });
+
+      return res.status(503).json({
+        status: "failed",
+        error: "Fal confirmed that video generation failed.",
+        provider: "fal"
+      });
+    }
+
+    /*
+     * STEP 4: Fal confirms completion.
+     *
+     * Retrieve the actual result, including late completions.
+     */
     let result;
+
     try {
-      result = await fal.queue.result(FAL_VIDEO_MODEL, { requestId });
-    } catch (providerError) {
-      // Fal can throw while a queued job is still running. Keep polling; terminal provider
-      // failure classification must be confirmed against live Fal responses before launch.
-      log("Fal result not ready:", providerError.message);
-      return res.json({ status: "processing" });
+      result = await fal.queue.result(FAL_VIDEO_MODEL, {
+        requestId
+      });
+    } catch (resultError) {
+      log("Fal completed but result retrieval needs retry:", {
+        requestId,
+        error: resultError.message
+      });
+
+      return res.json({
+        status: "processing",
+        stage: "retrieving_result"
+      });
     }
+
     const sourceUrl = result?.data?.video?.url;
-    if (!sourceUrl) return res.json({ status: "processing" });
 
-    try {
-      const storageKey = await saveFalVideoToR2(requestId, sourceUrl);
-      const videoUrl = await createVideoUrl(storageKey);
-      return res.json({ status: "completed", videoUrl, storageKey });
-    } catch (storageError) {
-      log("R2 storage failure:", storageError.message);
-      return res.status(503).json({ status: "failed", error: "We could not save your video securely. Your credits will be restored." });
+    if (!sourceUrl) {
+      log("Fal completed without a usable video URL:", requestId);
+
+      return res.json({
+        status: "processing",
+        stage: "awaiting_result"
+      });
     }
+
+    /*
+     * STEP 5: Save the successfully generated video to R2.
+     *
+     * Storage problems are NOT generation failures.
+     * Keep the job recoverable and retry storage on the
+     * next status check. Do not refund these jobs.
+     */
+    try {
+      const storageKey = await saveFalVideoToR2(
+        requestId,
+        sourceUrl
+      );
+
+      const videoUrl = await createVideoUrl(storageKey);
+
+      log("Video successfully completed and saved:", {
+        requestId,
+        storageKey
+      });
+
+      return res.json({
+        status: "completed",
+        videoUrl,
+        storageKey
+      });
+
+    } catch (storageError) {
+      log("R2 storage/recovery pending:", {
+        requestId,
+        error: storageError.message
+      });
+
+      return res.json({
+        status: "processing",
+        stage: "saving_video"
+      });
+    }
+
   } catch (err) {
-    log("Video status error:", err.message);
+    log("Video status reconciliation error:", {
+      requestId,
+      error: err.message
+    });
+
+    // Unexpected errors never become invented failures.
     return res.json({ status: "processing" });
-  }
-});
-
-app.get("/video-url", requireApiKey, async (req, res) => {
-  try {
-    const key = String(req.query.key || "");
-    const videoUrl = await createVideoUrl(key);
-    return res.json({ videoUrl, expiresIn: 3600 });
-  } catch (err) {
-    log("Signed URL error:", err.message);
-    return res.status(400).json({ error: "Unable to create video download link" });
-  }
-});
-
-app.get("/video-url/*", requireApiKey, async (req, res) => {
-  try {
-    const key = decodeURIComponent(req.params[0] || "");
-    const videoUrl = await createVideoUrl(key);
-    return res.json({ videoUrl, expiresIn: 3600 });
-  } catch (err) {
-    log("Signed URL error:", err.message);
-    return res.status(400).json({ error: "Unable to create video download link" });
   }
 });
 
