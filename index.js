@@ -95,12 +95,31 @@ async function saveFalVideoToR2(requestId, sourceUrl) {
   return key;
 }
 
-async function createVideoUrl(key) {
-  if (!R2_READY) throw new Error("Video storage is not configured on the backend");
-  if (typeof key !== "string" || !/^videos\/[A-Za-z0-9_-]{5,160}\.mp4$/.test(key)) {
+
+async function createVideoUrl(key, download = false) {
+  if (!R2_READY) {
+    throw new Error("Video storage is not configured on the backend");
+  }
+
+  if (
+    typeof key !== "string" ||
+    !/^videos\/[A-Za-z0-9_-]{5,160}\.mp4$/.test(key)
+  ) {
     throw new Error("Invalid video storage key");
   }
-  return getSignedUrl(r2, new GetObjectCommand({ Bucket: R2_BUCKET_NAME, Key: key }), { expiresIn: 3600 });
+
+  const command = new GetObjectCommand({
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+    ...(download
+      ? {
+          ResponseContentDisposition:
+            'attachment; filename="calevid-video.mp4"',
+        }
+      : {}),
+  });
+
+  return getSignedUrl(r2, command, { expiresIn: 3600 });
 }
 
 /* =========================
@@ -468,10 +487,17 @@ app.get("/video-status/:id", requireApiKey, async (req, res) => {
        7. CREATE SECURE VIDEO URL
     ------------------------------------- */
 
+    
+    /* -------------------------------------
+       7. CREATE SECURE VIDEO URLS
+    ------------------------------------- */
+
     let videoUrl;
+    let downloadUrl;
 
     try {
       videoUrl = await createVideoUrl(storageKey);
+      downloadUrl = await createVideoUrl(storageKey, true);
     } catch (urlError) {
       log("Video URL creation failed:", {
         requestId,
@@ -491,6 +517,7 @@ app.get("/video-status/:id", requireApiKey, async (req, res) => {
     return res.json({
       status: "completed",
       videoUrl,
+      downloadUrl,
       storageKey
     });
 
@@ -507,28 +534,44 @@ app.get("/video-status/:id", requireApiKey, async (req, res) => {
   }
 });
 
+
 app.get("/video-url", requireApiKey, async (req, res) => {
   try {
     const key = String(req.query.key || "");
-    const videoUrl = await createVideoUrl(key);
-    return res.json({ videoUrl, expiresIn: 3600 });
+    const download = req.query.download === "1";
+
+    const videoUrl = await createVideoUrl(key, download);
+
+    return res.json({
+      videoUrl,
+      expiresIn: 3600
+    });
   } catch (err) {
     log("Signed URL error:", err.message);
-    return res.status(400).json({ error: "Unable to create video download link" });
+    return res.status(400).json({
+      error: "Unable to create video download link"
+    });
   }
 });
 
 app.get("/video-url/*", requireApiKey, async (req, res) => {
   try {
     const key = decodeURIComponent(req.params[0] || "");
-    const videoUrl = await createVideoUrl(key);
-    return res.json({ videoUrl, expiresIn: 3600 });
+    const download = req.query.download === "1";
+
+    const videoUrl = await createVideoUrl(key, download);
+
+    return res.json({
+      videoUrl,
+      expiresIn: 3600
+    });
   } catch (err) {
     log("Signed URL error:", err.message);
-    return res.status(400).json({ error: "Unable to create video download link" });
+    return res.status(400).json({
+      error: "Unable to create video download link"
+    });
   }
 });
-
 /* =========================
    SAFE_MODE video endpoint
 ========================= */
