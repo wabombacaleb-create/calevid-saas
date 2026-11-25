@@ -194,7 +194,7 @@ app.post(
         // attach calevid_purchase metadata. Subscription transactions are routed above.
         // This webhook endpoint is dedicated to Calevid Paystack payments.
         const amountKobo = Number(data.amount || 0);
-        const priceKobo = 150 * 100;
+        const priceKobo = 99 * 100;
         if (String(data.currency || "").toUpperCase() !== "KES" || !reference || !email || !Number.isSafeInteger(amountKobo) || amountKobo <= 0 || amountKobo % priceKobo !== 0) {
           log("Invalid credit payment payload");
           return res.sendStatus(400);
@@ -209,7 +209,7 @@ app.post(
         agent: httpsAgent,
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: params,
-        signal: AbortSignal.timeout(20000),
+        signal: AbortSignal.timeout(90000),
       });
       const result = await response.text();
       if (!response.ok) {
